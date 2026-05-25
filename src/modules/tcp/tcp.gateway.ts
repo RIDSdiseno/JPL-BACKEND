@@ -144,8 +144,18 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     terminalId: string,
     position: NonNullable<ReturnType<typeof parseHHDPosition>>,
   ): void {
+    this.registry.updateLastPosition(terminalId, {
+      latitude: position.latitude,
+      longitude: position.longitude,
+      gpsValid: position.gpsValid,
+      speed: position.speed,
+      elevation: position.elevation,
+      direction: position.direction,
+      time: position.time,
+    });
+
     this.logger.debug(
-      `GPS procesado terminal=${terminalId} lat=${position.latitude} lng=${position.longitude}`,
+      `GPS procesado terminal=${terminalId} lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid}`,
     );
 
     void this.prisma;

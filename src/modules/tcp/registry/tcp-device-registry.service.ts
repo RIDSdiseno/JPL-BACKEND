@@ -1,6 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import type { Socket } from 'net';
 
+export interface TcpDevicePosition {
+  latitude: number;
+  longitude: number;
+  gpsValid: boolean;
+  speed: number;
+  elevation: number;
+  direction: number;
+  time: string;
+  receivedAt: Date;
+}
+
 export interface TcpDeviceConnection {
   id: string;
   terminalId: string;
@@ -10,6 +21,7 @@ export interface TcpDeviceConnection {
   connectedAt: Date;
   lastSeen: Date;
   packetsReceived: number;
+  lastPosition?: TcpDevicePosition;
 }
 
 export interface ReceivedTcpPacket {
@@ -71,8 +83,28 @@ export class TcpDeviceRegistryService {
     this.devicesByTerminalId.set(normalizedTerminalId, connection);
   }
 
+  updateLastPosition(
+    terminalId: string,
+    position: Omit<TcpDevicePosition, 'receivedAt'>,
+  ): void {
+    const device = this.getDeviceByTerminalId(terminalId);
+
+    if (!device) return;
+
+    device.lastPosition = {
+      ...position,
+      receivedAt: new Date(),
+    };
+
+    device.lastSeen = new Date();
+  }
+
   getDeviceByTerminalId(terminalId: string): TcpDeviceConnection | undefined {
     return this.devicesByTerminalId.get(terminalId.toUpperCase());
+  }
+
+  getConnectedTerminalIds(): string[] {
+    return Array.from(this.devicesByTerminalId.keys());
   }
 
   queueCommand(terminalId: string, command: Buffer): void {
@@ -116,6 +148,7 @@ export class TcpDeviceRegistryService {
       connectedAt: device.connectedAt,
       lastSeen: device.lastSeen,
       packetsReceived: device.packetsReceived,
+      lastPosition: device.lastPosition ?? null,
     }));
   }
 

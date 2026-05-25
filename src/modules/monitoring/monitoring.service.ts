@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../config/prisma/prisma.service';
+import { TcpDeviceRegistryService } from '../../modules/tcp/registry/tcp-device-registry.service';
 import type {
   MonitoringLockEntity,
   MonitoringLockStatus,
@@ -8,7 +9,10 @@ import type { MonitoringLocksResponseDto } from './dto/monitoring-lock-response.
 
 @Injectable()
 export class MonitoringService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly tcpRegistry: TcpDeviceRegistryService,
+  ) {}
 
   async getLocks(): Promise<MonitoringLocksResponseDto> {
     const devices = await this.prisma.device.findMany({
@@ -35,21 +39,28 @@ export class MonitoringService {
         );
       })
       .map((device, index) => {
-        const status = this.resolveStatus(device.updatedAt);
-        const coords = this.getDemoCoordinates(index);
+        const terminalId =
+          device.imei || device.serialNumber || device.deviceId || device.id;
+
+        const tcpDevice = this.tcpRegistry.getDeviceByTerminalId(terminalId);
+        const lastPosition = tcpDevice?.lastPosition;
+
+        const status: MonitoringLockStatus = tcpDevice ? 'ONLINE' : 'OFFLINE';
+
+        const fallbackCoords = this.getDemoCoordinates(index);
 
         return {
           id: device.id,
-          name: device.name || `Candado ${device.deviceId}`,
-          imei: device.imei || device.serialNumber || device.deviceId,
+          name: device.name || `Candado ${terminalId}`,
+          imei: terminalId,
           status,
-          latitude: coords.latitude,
-          longitude: coords.longitude,
+          latitude: lastPosition?.latitude ?? fallbackCoords.latitude,
+          longitude: lastPosition?.longitude ?? fallbackCoords.longitude,
           battery: 0,
-          speed: 0,
-          altitude: undefined,
+          speed: lastPosition?.speed ?? 0,
+          altitude: lastPosition?.elevation,
           floor: undefined,
-          lastSeen: device.updatedAt ?? device.createdAt,
+          lastSeen: tcpDevice?.lastSeen ?? device.updatedAt ?? device.createdAt,
         };
       });
 
@@ -62,21 +73,6 @@ export class MonitoringService {
         alarm: locks.filter((lock) => lock.status === 'ALARM').length,
       },
     };
-  }
-
-  private resolveStatus(updatedAt: Date | null): MonitoringLockStatus {
-    if (!updatedAt) {
-      return 'OFFLINE';
-    }
-
-    const diffMs = Date.now() - updatedAt.getTime();
-    const diffMinutes = diffMs / 1000 / 60;
-
-    if (diffMinutes <= 10) {
-      return 'ONLINE';
-    }
-
-    return 'OFFLINE';
   }
 
   private getDemoCoordinates(index: number): {
