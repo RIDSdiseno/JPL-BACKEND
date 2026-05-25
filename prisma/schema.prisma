@@ -1,0 +1,894 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Alert {
+  id             String        @id
+  lockId         String?
+  title          String
+  message        String
+  severity       AlertSeverity @default(INFO)
+  status         AlertStatus   @default(OPEN)
+  resolvedAt     DateTime?
+  acknowledgedAt DateTime?
+  rawPayload     Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime
+  Lock           Lock?         @relation(fields: [lockId], references: [id])
+
+  @@index([createdAt])
+  @@index([lockId])
+  @@index([severity])
+  @@index([status])
+}
+
+model AuditLog {
+  id          String      @id
+  userId      String?
+  action      AuditAction
+  entity      String
+  entityId    String?
+  description String?
+  oldValues   Json?
+  newValues   Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime    @default(now())
+  User        User?       @relation(fields: [userId], references: [id])
+
+  @@index([action])
+  @@index([createdAt])
+  @@index([entity])
+  @@index([userId])
+}
+
+model Branch {
+  id        String    @id
+  name      String
+  address   String?
+  city      String?
+  region    String?
+  companyId String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime
+  deletedAt DateTime?
+  Company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  Lock      Lock[]
+
+  @@index([companyId])
+}
+
+model Company {
+  id        String        @id
+  name      String
+  rut       String?
+  email     String?
+  phone     String?
+  address   String?
+  status    CompanyStatus @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime
+  deletedAt DateTime?
+  Branch    Branch[]
+  Geofence  Geofence[]
+  Lock      Lock[]
+  User      User[]
+
+  @@index([status])
+}
+
+model Device {
+  id                    String    @id
+  providerId            String?   @unique
+  deviceId              String    @unique
+  name                  String
+  deviceType            String    @default("SMART_LOCK")
+  productModel          String    @default("G300N")
+  companyId             String?
+  imei                  String?
+  serialNumber          String?
+  simNumber             String?
+  iccid                 String?
+  firmwareVersion       String?
+  hardwareVersion       String?
+  bluetoothName         String?
+  bleMac                String?
+  nfcSupported          Boolean   @default(true)
+  gpsSupported          Boolean   @default(true)
+  loraSupported         Boolean   @default(false)
+  remoteUnlockSupported Boolean   @default(true)
+  keyboardSupported     Boolean   @default(false)
+  batteryLevel          Int?
+  signalStrength        Int?
+  lockStatus            String?
+  shackleStatus         String?
+  onlineStatus          String    @default("OFFLINE")
+  lastConnectionAt      DateTime?
+  lastLocationLat       Float?
+  lastLocationLng       Float?
+  lastAddress           String?
+  status                String    @default("ACTIVE")
+  notes                 String?
+  metadata              Json?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime
+  deletedAt             DateTime?
+
+  @@index([companyId])
+  @@index([deviceType])
+  @@index([imei])
+  @@index([onlineStatus])
+  @@index([productModel])
+  @@index([serialNumber])
+  @@index([status])
+}
+
+model DeviceAlarmEvent {
+  id            String    @id
+  eventId       String?
+  deviceId      String
+  deviceName    String?
+  productModel  String?
+  gpsTime       DateTime?
+  batteryLevel  Int?
+  alarmType     String
+  alarmLevel    String
+  operatingInfo String?
+  lockStatus    String?
+  dataType      String?
+  latitude      Float?
+  longitude     Float?
+  eventImageUrl String?
+  description   String?
+  status        String    @default("NEW")
+  rawPayload    Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime
+
+  @@index([alarmLevel])
+  @@index([alarmType])
+  @@index([deviceId])
+  @@index([gpsTime])
+  @@index([status])
+}
+
+model DeviceAlarmPolicy {
+  id                String   @id
+  deviceId          String
+  receivePhones     String?
+  receiveEmails     String?
+  pushSmsEnabled    Boolean  @default(false)
+  pushEmailEnabled  Boolean  @default(false)
+  sendingEventTypes String
+  enabled           Boolean  @default(true)
+  remarks           String?
+  createdById       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime
+
+  @@index([deviceId])
+  @@index([enabled])
+}
+
+model DeviceCommand {
+  id                String    @id
+  deviceId          String
+  userId            String?
+  command           String
+  commandType       String?
+  commandContent    String?
+  status            String    @default("pending")
+  isReserved        Boolean   @default(false)
+  isCancelled       Boolean   @default(false)
+  requestedByUserId String?
+  operatorName      String?
+  payload           Json?
+  requestPayload    Json?
+  responsePayload   Json?
+  responseContent   String?
+  executeWhenOnline Boolean   @default(false)
+  executionTime     DateTime?
+  expiresAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime
+  completedAt       DateTime?
+
+  @@index([createdAt])
+  @@index([deviceId])
+  @@index([status])
+}
+
+model DeviceCompanyAssignmentHistory {
+  id            String   @id
+  deviceId      String
+  fromCompanyId String?
+  toCompanyId   String
+  assignedById  String?
+  remarks       String?
+  createdAt     DateTime @default(now())
+
+  @@index([deviceId])
+  @@index([toCompanyId])
+}
+
+model DeviceDiagnosisLog {
+  id             String   @id
+  deviceId       String
+  deviceName     String?
+  productModel   String?
+  companyId      String?
+  diagnosisType  String   @default("UNKNOWN")
+  logLevel       String   @default("INFO")
+  summary        String
+  fullLog        String
+  rawPayloadJson Json?
+  source         String   @default("MOCK")
+  attachmentUrl  String?
+  uploadedById   String?
+  uploadedByName String?
+  uploadedAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  @@index([companyId])
+  @@index([deviceId])
+  @@index([diagnosisType])
+  @@index([logLevel])
+  @@index([uploadedAt])
+}
+
+model DeviceEvent {
+  id            String    @id
+  deviceId      String
+  deviceName    String?
+  productModel  String?
+  productType   String?
+  gpsTime       DateTime?
+  batteryLevel  Int?
+  eventName     String?
+  eventType     String    @default("UNKNOWN")
+  lockStatus    String?
+  dataType      String?
+  latitude      Float?
+  longitude     Float?
+  eventImageUrl String?
+  source        String?
+  operatingInfo String?
+  description   String?
+  rawPayload    Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime
+
+  @@index([dataType])
+  @@index([deviceId])
+  @@index([eventType])
+  @@index([gpsTime])
+  @@index([productModel])
+}
+
+model DeviceGeoFence {
+  id         String    @id
+  deviceId   String
+  geofenceId String
+  syncedAt   DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@unique([deviceId, geofenceId])
+  @@index([deviceId])
+  @@index([geofenceId])
+}
+
+model DeviceHistoryData {
+  id              String   @id
+  deviceId        String
+  deviceName      String?
+  deviceType      String?
+  productModel    String?
+  companyId       String?
+  companyName     String?
+  reportType      String   @default("REALTIME")
+  reportedAt      DateTime @default(now())
+  longitude       Float?
+  latitude        Float?
+  address         String?
+  lockStatus      String?
+  shackleStatus   String?
+  batteryLevel    Int?
+  signalStrength  Int?
+  temperature     Float?
+  speed           Float?
+  firmwareVersion String?
+  rawPayloadJson  Json?
+  source          String?
+  createdAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([deviceId])
+  @@index([reportType])
+  @@index([reportedAt])
+}
+
+model DeviceNfcCard {
+  id          String    @id
+  deviceId    String
+  nfcCardId   String
+  cardNumber  String?
+  blockNumber String?
+  status      String    @default("ACTIVE")
+  syncedAt    DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now())
+
+  @@unique([deviceId, nfcCardId])
+  @@index([deviceId])
+  @@index([nfcCardId])
+}
+
+model DeviceParameterAuditLog {
+  id        String   @id
+  deviceId  String
+  commandId String?
+  action    String
+  details   Json?
+  userId    String?
+  createdAt DateTime @default(now())
+
+  @@index([commandId])
+  @@index([createdAt])
+  @@index([deviceId])
+}
+
+model DeviceParameterChangeLog {
+  id           String   @id
+  deviceId     String
+  parameterKey String
+  oldValue     String?
+  newValue     String?
+  changedById  String?
+  commandId    String?
+  result       String?
+  createdAt    DateTime @default(now())
+
+  @@index([commandId])
+  @@index([createdAt])
+  @@index([deviceId])
+  @@index([parameterKey])
+}
+
+model DeviceParameterCommand {
+  id               String    @id
+  deviceId         String
+  commandType      String
+  status           String    @default("PENDING")
+  requestedPayload Json?
+  responsePayload  Json?
+  errorMessage     String?
+  requestedById    String?
+  requestedAt      DateTime  @default(now())
+  completedAt      DateTime?
+  reservedFor      DateTime?
+
+  @@index([commandType])
+  @@index([deviceId])
+  @@index([requestedAt])
+  @@index([status])
+}
+
+model DeviceParameterSnapshot {
+  id          String   @id
+  deviceId    String
+  category    String   @default("all")
+  source      String   @default("READ")
+  parameters  Json
+  readById    String?
+  createdById String?
+  readAt      DateTime @default(now())
+  rawPayload  Json?
+  createdAt   DateTime @default(now())
+
+  @@index([category])
+  @@index([deviceId])
+  @@index([readAt])
+}
+
+model DevicePushEvent {
+  id                String    @id
+  deviceId          String?
+  affiliatedCompany String?
+  pushType          String
+  sendingEventType  String
+  sendTo            String?
+  sendingStatus     String
+  sendingContent    String?
+  sendTime          DateTime?
+  errorMessage      String?
+  rawPayload        Json?
+  createdAt         DateTime  @default(now())
+
+  @@index([deviceId])
+  @@index([pushType])
+  @@index([sendTime])
+  @@index([sendingStatus])
+}
+
+model DeviceTelemetry {
+  id         String   @id
+  deviceId   String
+  battery    Int?
+  signal     Int?
+  speed      Float?
+  latitude   Float?
+  longitude  Float?
+  rawPayload Json?
+  recordedAt DateTime @default(now())
+
+  @@index([deviceId])
+  @@index([recordedAt])
+}
+
+model DynamicPasswordAuditLog {
+  id         String   @id
+  deviceId   String
+  viewedById String?
+  ipAddress  String?
+  userAgent  String?
+  result     String
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([deviceId])
+  @@index([viewedById])
+}
+
+model FirmwareFile {
+  id               String    @id
+  deviceType       String
+  productModel     String
+  firmwareType     String
+  versionName      String
+  fileName         String
+  originalFileName String?
+  filePath         String
+  fileSize         Int
+  mimeType         String?
+  checksum         String?
+  description      String?
+  uploadedById     String?
+  uploadedByName   String?
+  uploadedAt       DateTime  @default(now())
+  deletedAt        DateTime?
+
+  @@unique([deviceType, productModel, firmwareType, versionName])
+  @@index([deviceType])
+  @@index([firmwareType])
+  @@index([productModel])
+}
+
+model GeoFence {
+  id        String   @id
+  name      String
+  companyId String?
+  type      String   @default("circle")
+  centerLat Float
+  centerLng Float
+  radiusMt  Float
+  isActive  Boolean  @default(true)
+  metadata  Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+
+  @@index([companyId])
+  @@index([isActive])
+}
+
+model Geofence {
+  id          String   @id
+  name        String
+  description String?
+  companyId   String
+  centerLat   Float
+  centerLng   Float
+  radiusMt    Float
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+  Company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([isActive])
+}
+
+model Lock {
+  id                String               @id
+  name              String
+  internalCode      String               @unique
+  serialNumber      String?              @unique
+  imei              String?              @unique
+  macAddress        String?              @unique
+  status            LockStatus           @default(ACTIVE)
+  connectionType    LockConnectionType   @default(UNKNOWN)
+  connectionStatus  LockConnectionStatus @default(UNKNOWN)
+  batteryLevel      Int?
+  signalLevel       Int?
+  firmwareVersion   String?
+  hardwareVersion   String?
+  lastConnectionAt  DateTime?
+  lastSyncAt        DateTime?
+  companyId         String?
+  branchId          String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime
+  deletedAt         DateTime?
+  Alert             Alert[]
+  Branch            Branch?              @relation(fields: [branchId], references: [id])
+  Company           Company?             @relation(fields: [companyId], references: [id])
+  LockAccess        LockAccess[]
+  LockCommand       LockCommand[]
+  LockEvent         LockEvent[]
+  LockLocation      LockLocation[]
+  MaintenanceRecord MaintenanceRecord[]
+
+  @@index([branchId])
+  @@index([companyId])
+  @@index([connectionStatus])
+  @@index([connectionType])
+  @@index([status])
+}
+
+model LockAccess {
+  id              String       @id
+  userId          String
+  lockId          String
+  accessType      AccessType   @default(OPEN_CLOSE)
+  status          AccessStatus @default(ACTIVE)
+  validFrom       DateTime?
+  validTo         DateTime?
+  allowedDays     String?
+  allowedFromTime String?
+  allowedToTime   String?
+  createdById     String?
+  reason          String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime
+  revokedAt       DateTime?
+  Lock            Lock         @relation(fields: [lockId], references: [id], onDelete: Cascade)
+  User            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lockId])
+  @@index([lockId])
+  @@index([status])
+  @@index([userId])
+}
+
+model LockCommand {
+  id              String        @id
+  lockId          String
+  userId          String?
+  type            CommandType
+  status          CommandStatus @default(PENDING)
+  requestPayload  Json?
+  responsePayload Json?
+  errorMessage    String?
+  sentAt          DateTime?
+  acknowledgedAt  DateTime?
+  completedAt     DateTime?
+  expiresAt       DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime
+  Lock            Lock          @relation(fields: [lockId], references: [id], onDelete: Cascade)
+  User            User?         @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([lockId])
+  @@index([status])
+  @@index([userId])
+}
+
+model LockEvent {
+  id           String        @id
+  lockId       String
+  userId       String?
+  type         LockEventType
+  message      String?
+  latitude     Float?
+  longitude    Float?
+  batteryLevel Int?
+  signalLevel  Int?
+  rawPayload   Json?
+  createdAt    DateTime      @default(now())
+  Lock         Lock          @relation(fields: [lockId], references: [id], onDelete: Cascade)
+  User         User?         @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([lockId])
+  @@index([type])
+  @@index([userId])
+}
+
+model LockLocation {
+  id           String   @id
+  lockId       String
+  latitude     Float
+  longitude    Float
+  accuracy     Float?
+  speed        Float?
+  heading      Float?
+  batteryLevel Int?
+  signalLevel  Int?
+  source       String?
+  rawPayload   Json?
+  recordedAt   DateTime @default(now())
+  Lock         Lock     @relation(fields: [lockId], references: [id], onDelete: Cascade)
+
+  @@index([lockId])
+  @@index([recordedAt])
+}
+
+model MaintenanceRecord {
+  id             String    @id
+  lockId         String
+  title          String
+  description    String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  technicianName String?
+  result         String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime
+  Lock           Lock      @relation(fields: [lockId], references: [id], onDelete: Cascade)
+
+  @@index([lockId])
+}
+
+model MonitoringAuditLog {
+  id          String   @id
+  userId      String?
+  deviceId    String?
+  action      String
+  description String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([action])
+  @@index([createdAt])
+  @@index([deviceId])
+  @@index([userId])
+}
+
+model NfcCard {
+  id        String   @id
+  cardNo    String   @unique
+  holder    String?
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+}
+
+model OtaUpgradeRecord {
+  id                  String    @id
+  deviceId            String
+  deviceName          String?
+  productModel        String?
+  companyId           String?
+  firmwareFileId      String
+  firmwareType        String
+  fromVersion         String?
+  toVersion           String
+  targetVersion       String?
+  status              String    @default("PENDING")
+  progress            Int       @default(0)
+  commandId           String?
+  commandPayloadJson  Json?
+  responsePayloadJson Json?
+  errorMessage        String?
+  startedAt           DateTime?
+  finishedAt          DateTime?
+  verifiedAt          DateTime?
+  createdById         String?
+  createdByName       String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime
+
+  @@index([createdAt])
+  @@index([deviceId])
+  @@index([firmwareFileId])
+  @@index([status])
+}
+
+model Permission {
+  id             String           @id
+  code           String           @unique
+  name           String
+  description    String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime
+  RolePermission RolePermission[]
+}
+
+model Role {
+  id             String           @id
+  name           String           @unique
+  description    String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime
+  RolePermission RolePermission[]
+  User           User[]
+}
+
+model RolePermission {
+  id           String     @id
+  roleId       String
+  permissionId String
+  createdAt    DateTime   @default(now())
+  Permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  Role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@index([permissionId])
+  @@index([roleId])
+}
+
+model User {
+  id                  String        @id
+  name                String
+  email               String        @unique
+  passwordHash        String
+  phone               String?
+  status              UserStatus    @default(ACTIVE)
+  companyId           String?
+  roleId              String?
+  lastLoginAt         DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime
+  deletedAt           DateTime?
+  username            String?
+  nickname            String?
+  phoneNumber         String?
+  accountStatus       UserStatus    @default(ACTIVE)
+  forceChangePassword Boolean       @default(false)
+  isDeleted           Boolean       @default(false)
+  AuditLog            AuditLog[]
+  LockAccess          LockAccess[]
+  LockCommand         LockCommand[]
+  LockEvent           LockEvent[]
+  Company             Company?      @relation(fields: [companyId], references: [id])
+  Role                Role?         @relation(fields: [roleId], references: [id])
+
+  @@index([companyId])
+  @@index([roleId])
+  @@index([status])
+}
+
+enum AccessStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum AccessType {
+  OPEN
+  CLOSE
+  OPEN_CLOSE
+  ADMIN
+  VIEW_ONLY
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+  DISMISSED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  ASSIGN
+  REVOKE
+  OPEN_LOCK
+  CLOSE_LOCK
+  SEND_COMMAND
+  SYSTEM_EVENT
+}
+
+enum CommandStatus {
+  PENDING
+  SENT
+  ACKNOWLEDGED
+  SUCCESS
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+enum CommandType {
+  OPEN
+  CLOSE
+  LOCK
+  UNLOCK
+  SYNC
+  RESET
+  REQUEST_STATUS
+  REQUEST_LOCATION
+}
+
+enum CompanyStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum LockConnectionStatus {
+  ONLINE
+  OFFLINE
+  SLEEP
+  LOST_SIGNAL
+  UNKNOWN
+}
+
+enum LockConnectionType {
+  IOT
+  BLUETOOTH
+  LORA
+  NB_IOT
+  LTE
+  WIFI
+  API_EXTERNAL
+  UNKNOWN
+}
+
+enum LockEventType {
+  OPENED
+  CLOSED
+  OPEN_REQUESTED
+  CLOSE_REQUESTED
+  ACCESS_GRANTED
+  ACCESS_DENIED
+  COMMAND_SENT
+  COMMAND_SUCCESS
+  COMMAND_FAILED
+  LOW_BATTERY
+  SIGNAL_LOST
+  SIGNAL_RESTORED
+  TAMPER_ALERT
+  GPS_UPDATED
+  GEOFENCE_EXIT
+  GEOFENCE_ENTER
+  MAINTENANCE_STARTED
+  MAINTENANCE_FINISHED
+  DEVICE_REGISTERED
+  DEVICE_UPDATED
+}
+
+enum LockStatus {
+  ACTIVE
+  INACTIVE
+  LOCKED
+  UNLOCKED
+  MAINTENANCE
+  LOST_SIGNAL
+  LOW_BATTERY
+  BLOCKED
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+  PENDING
+}

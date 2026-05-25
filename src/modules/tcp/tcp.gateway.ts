@@ -1,0 +1,148 @@
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
+import * as net from 'net';
+import { PrismaService } from '../../config/prisma/prisma.service';
+import {
+  buildHHDResponse8001,
+  parseHHDPacket,
+  parseHHDPosition,
+} from './protocols/hhd-protocol';
+import { TcpDeviceRegistryService } from './registry/tcp-device-registry.service';
+
+@Injectable()
+export class TcpGateway implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(TcpGateway.name);
+  private server: net.Server | null = null;
+
+  constructor(
+    private readonly registry: TcpDeviceRegistryService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  onModuleInit(): void {
+    const port = Number(process.env.TCP_PORT ?? 5000);
+
+    this.server = net.createServer((socket) => {
+      const socketId = this.getSocketId(socket);
+      const ip = socket.remoteAddress ?? 'unknown';
+
+      this.registry.addConnection({
+        id: socketId,
+        terminalId: '',
+        socket,
+        ip,
+        remotePort: socket.remotePort,
+        connectedAt: new Date(),
+        lastSeen: new Date(),
+        packetsReceived: 0,
+      });
+
+      this.logger.log(`Nueva conexión TCP: ${socketId}`);
+
+      socket.on('data', (data: Buffer) => {
+        this.handleData(socket, data);
+      });
+
+      socket.on('close', () => {
+        this.logger.warn(`Conexión TCP cerrada: ${socketId}`);
+        this.registry.removeConnection(socketId);
+      });
+
+      socket.on('error', (error: Error) => {
+        this.logger.error(`Error TCP ${socketId}: ${error.message}`);
+        this.registry.removeConnection(socketId);
+      });
+    });
+
+    this.server.listen(port, '0.0.0.0', () => {
+      this.logger.log(`Servidor TCP escuchando en puerto ${port}`);
+    });
+  }
+
+  onModuleDestroy(): void {
+    this.server?.close();
+  }
+
+  private handleData(socket: net.Socket, buffer: Buffer): void {
+    const socketId = this.getSocketId(socket);
+    const ip = socket.remoteAddress ?? 'unknown';
+    const remotePort = socket.remotePort;
+    const hex = buffer.toString('hex').toUpperCase();
+
+    this.registry.touch(socketId);
+
+    const parsed = parseHHDPacket(buffer);
+
+    if (!parsed) {
+      this.logger.warn(`Paquete no reconocido: ${hex}`);
+      return;
+    }
+
+    this.registry.updateTerminalId(socketId, parsed.terminalId);
+
+    this.registry.addPacket({
+      socketId,
+      terminalId: parsed.terminalId,
+      ip,
+      remotePort,
+      size: buffer.length,
+      hex,
+      receivedAt: new Date(),
+    });
+
+    this.logger.log(
+      `Paquete recibido terminal=${parsed.terminalId} msgId=0x${parsed.msgId
+        .toString(16)
+        .toUpperCase()}`,
+    );
+
+    const pendingCommands = this.registry.consumePendingCommands(
+      parsed.terminalId,
+    );
+
+    for (const command of pendingCommands) {
+      socket.write(command);
+      this.logger.log(`Comando pendiente enviado a ${parsed.terminalId}`);
+    }
+
+    if (parsed.msgId === 0x0200 || parsed.msgId === 0x0210) {
+      const position = parseHHDPosition(parsed.body);
+
+      if (position) {
+        this.logger.log(
+          `GPS ${parsed.terminalId}: lat=${position.latitude} lng=${position.longitude}`,
+        );
+
+        this.handleGpsPosition(parsed.terminalId, position);
+      }
+    }
+
+    const response = buildHHDResponse8001(
+      parsed.terminalId,
+      parsed.serialNumber,
+      parsed.msgId,
+    );
+
+    socket.write(response);
+  }
+
+  private handleGpsPosition(
+    terminalId: string,
+    position: NonNullable<ReturnType<typeof parseHHDPosition>>,
+  ): void {
+    this.logger.debug(
+      `GPS procesado terminal=${terminalId} lat=${position.latitude} lng=${position.longitude}`,
+    );
+
+    void this.prisma;
+    // Luego persistimos real en Prisma cuando definamos la tabla de ubicaciones.
+  }
+
+  private getSocketId(socket: net.Socket): string {
+    return `${socket.remoteAddress}:${socket.remotePort}`;
+  }
+}
