@@ -8,7 +8,11 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { buildCloseCommand, buildOpenCommand } from './protocols/hhd-protocol';
+import {
+  buildCloseCommand,
+  buildEnableTrackingCommand,
+  buildOpenCommand,
+} from './protocols/hhd-protocol';
 import { TcpDeviceRegistryService } from './registry/tcp-device-registry.service';
 
 @Controller('tcp')
@@ -77,37 +81,15 @@ export class TcpController {
     const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
     const command = buildOpenCommand(normalizedTerminalId);
 
-    if (device?.socket && !device.socket.destroyed) {
-      device.socket.write(command);
-
-      return {
-        ok: true,
-        data: {
-          terminalId: normalizedTerminalId,
-          action: 'OPEN',
-          sent: true,
-          queued: false,
-          operatorName: body?.operatorName ?? 'admin',
-          hexSent: command.toString('hex').toUpperCase(),
-          message: 'Comando ABRIR enviado por TCP',
-        },
-      };
-    }
-
-    this.registry.queueCommand(normalizedTerminalId, command);
-
-    return {
-      ok: true,
-      data: {
-        terminalId: normalizedTerminalId,
-        action: 'OPEN',
-        sent: false,
-        queued: true,
-        operatorName: body?.operatorName ?? 'admin',
-        hexSent: command.toString('hex').toUpperCase(),
-        message: 'Comando ABRIR encolado hasta que el candado se conecte',
-      },
-    };
+    return this.sendOrQueueCommand({
+      terminalId: normalizedTerminalId,
+      command,
+      device,
+      action: 'OPEN',
+      operatorName: body?.operatorName,
+      sentMessage: 'Comando ABRIR enviado por TCP',
+      queuedMessage: 'Comando ABRIR encolado hasta que el candado se conecte',
+    });
   }
 
   @Post('devices/:terminalId/close')
@@ -119,36 +101,138 @@ export class TcpController {
     const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
     const command = buildCloseCommand(normalizedTerminalId);
 
+    return this.sendOrQueueCommand({
+      terminalId: normalizedTerminalId,
+      command,
+      device,
+      action: 'CLOSE',
+      operatorName: body?.operatorName,
+      sentMessage: 'Comando CERRAR enviado por TCP',
+      queuedMessage: 'Comando CERRAR encolado hasta que el candado se conecte',
+    });
+  }
+
+  @Post('devices/:terminalId/enable-tracking')
+  enableTracking(
+    @Param('terminalId') terminalId: string,
+    @Body()
+    body?: {
+      timeIntervalSeconds?: number;
+      heartbeatIntervalSeconds?: number;
+      operatorName?: string;
+    },
+  ) {
+    const normalizedTerminalId = terminalId.toUpperCase();
+    const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
+
+    const timeIntervalSeconds = this.normalizeInterval(
+      body?.timeIntervalSeconds,
+      30,
+      10,
+      86_400,
+    );
+
+    const heartbeatIntervalSeconds = this.normalizeInterval(
+      body?.heartbeatIntervalSeconds,
+      60,
+      10,
+      86_400,
+    );
+
+    const command = buildEnableTrackingCommand(normalizedTerminalId, {
+      timeIntervalSeconds,
+      heartbeatIntervalSeconds,
+    });
+
+    return this.sendOrQueueCommand({
+      terminalId: normalizedTerminalId,
+      command,
+      device,
+      action: 'ENABLE_TRACKING',
+      operatorName: body?.operatorName,
+      sentMessage: `Configuración de tracking enviada por TCP cada ${timeIntervalSeconds}s`,
+      queuedMessage:
+        'Configuración de tracking encolada hasta que el candado se conecte',
+      extraData: {
+        timeIntervalSeconds,
+        heartbeatIntervalSeconds,
+      },
+    });
+  }
+
+  private sendOrQueueCommand(args: {
+    terminalId: string;
+    command: Buffer;
+    device?: {
+      socket?: {
+        destroyed?: boolean;
+        write: (buffer: Buffer) => void;
+      };
+    };
+    action: 'OPEN' | 'CLOSE' | 'ENABLE_TRACKING';
+    operatorName?: string;
+    sentMessage: string;
+    queuedMessage: string;
+    extraData?: Record<string, unknown>;
+  }) {
+    const {
+      terminalId,
+      command,
+      device,
+      action,
+      operatorName,
+      sentMessage,
+      queuedMessage,
+      extraData,
+    } = args;
+
     if (device?.socket && !device.socket.destroyed) {
       device.socket.write(command);
 
       return {
         ok: true,
         data: {
-          terminalId: normalizedTerminalId,
-          action: 'CLOSE',
+          terminalId,
+          action,
           sent: true,
           queued: false,
-          operatorName: body?.operatorName ?? 'admin',
+          operatorName: operatorName ?? 'admin',
           hexSent: command.toString('hex').toUpperCase(),
-          message: 'Comando CERRAR enviado por TCP',
+          message: sentMessage,
+          ...extraData,
         },
       };
     }
 
-    this.registry.queueCommand(normalizedTerminalId, command);
+    this.registry.queueCommand(terminalId, command);
 
     return {
       ok: true,
       data: {
-        terminalId: normalizedTerminalId,
-        action: 'CLOSE',
+        terminalId,
+        action,
         sent: false,
         queued: true,
-        operatorName: body?.operatorName ?? 'admin',
+        operatorName: operatorName ?? 'admin',
         hexSent: command.toString('hex').toUpperCase(),
-        message: 'Comando CERRAR encolado hasta que el candado se conecte',
+        message: queuedMessage,
+        ...extraData,
       },
     };
+  }
+
+  private normalizeInterval(
+    value: unknown,
+    fallback: number,
+    min: number,
+    max: number,
+  ): number {
+    const parsed = Number(value);
+
+    if (!Number.isFinite(parsed)) {
+      return fallback;
+    }
+
+    return Math.min(Math.max(Math.trunc(parsed), min), max);
   }
 }

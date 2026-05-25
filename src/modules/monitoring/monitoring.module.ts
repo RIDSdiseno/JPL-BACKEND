@@ -8,5 +8,6 @@ import { MonitoringService } from './monitoring.service';
   imports: [PrismaModule, TcpModule],
   controllers: [MonitoringController],
   providers: [MonitoringService],
+  exports: [MonitoringService],
 })
 export class MonitoringModule {}

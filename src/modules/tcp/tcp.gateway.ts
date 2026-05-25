@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import * as net from 'net';
 import { randomUUID } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../config/prisma/prisma.service';
 import {
   buildHHDResponse8001,
@@ -13,6 +14,7 @@ import {
   parseHHDPosition,
 } from './protocols/hhd-protocol';
 import { TcpDeviceRegistryService } from './registry/tcp-device-registry.service';
+import { LbsGeolocationService } from './services/lbs-geolocation.service';
 
 @Injectable()
 export class TcpGateway implements OnModuleInit, OnModuleDestroy {
@@ -22,6 +24,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly registry: TcpDeviceRegistryService,
     private readonly prisma: PrismaService,
+    private readonly lbsGeolocation: LbsGeolocationService,
   ) {}
 
   onModuleInit(): void {
@@ -145,7 +148,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
 
       if (position) {
         this.logger.log(
-          `GPS ${parsed.terminalId}: lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid} coordsInRange=${position.coordsInRange} speed=${position.speed} elevation=${position.elevation} status=${position.status} alarmFlag=${position.alarmFlag}`,
+          `GPS ${parsed.terminalId}: lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid} source=${position.locationSource} lbsCells=${position.lbsCells.length} satellites=${position.satellites ?? 'N/A'} csq=${position.csq ?? 'N/A'} battery=${position.batteryLevel ?? 'N/A'} speed=${position.speed} status=${position.status}`,
         );
 
         await this.handleGpsPosition(parsed.terminalId, position, hex);
@@ -180,9 +183,21 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       position.coordsInRange &&
       this.isValidCoordinate(position.latitude, position.longitude);
 
-    const canUseLocation = coordsInRange;
+    const canUseGpsLocation =
+      position.locationSource === 'GPS' && coordsInRange;
 
-    if (canUseLocation) {
+    const hasLbs =
+      position.locationSource === 'LBS' && position.lbsCells.length > 0;
+
+    const lbsLocation = hasLbs
+      ? await this.lbsGeolocation.resolve(position.lbsCells)
+      : null;
+
+    const canUseLbsLocation =
+      !!lbsLocation &&
+      this.isValidCoordinate(lbsLocation.latitude, lbsLocation.longitude);
+
+    if (canUseGpsLocation) {
       this.registry.updateLastPosition(terminalId, {
         latitude: position.latitude,
         longitude: position.longitude,
@@ -194,27 +209,92 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       });
     }
 
+    if (canUseLbsLocation && lbsLocation) {
+      this.registry.updateLastPosition(terminalId, {
+        latitude: lbsLocation.latitude,
+        longitude: lbsLocation.longitude,
+        gpsValid: false,
+        speed: position.speed,
+        elevation: position.elevation,
+        direction: position.direction,
+        time: position.time,
+      });
+    }
+
+    const lbsCellsJson = position.lbsCells.map((cell) => ({
+      mcc: cell.mcc,
+      mnc: cell.mnc,
+      lac: cell.lac,
+      cellId: cell.cellId,
+      rxl: cell.rxl ?? null,
+    }));
+
+    const resolvedLbsLocation = lbsLocation
+      ? {
+          latitude: lbsLocation.latitude,
+          longitude: lbsLocation.longitude,
+          accuracy: lbsLocation.accuracy ?? null,
+          source: lbsLocation.source,
+        }
+      : null;
+
+    const metadata = {
+      gpsValid: position.gpsValid,
+      coordsInRange,
+      locationSource: canUseGpsLocation
+        ? 'GPS'
+        : canUseLbsLocation
+          ? 'LBS'
+          : position.locationSource,
+      lbsCells: lbsCellsJson,
+      resolvedLbsLocation,
+      batteryLevel: position.batteryLevel ?? null,
+      csq: position.csq ?? null,
+      satellites: position.satellites ?? null,
+      speed: position.speed,
+      elevation: position.elevation,
+      direction: position.direction,
+      gpsTime: position.time,
+      source: 'TCP_HHD',
+    } satisfies Prisma.InputJsonObject;
+
+    const rawPayload = {
+      rawHex,
+      gpsValid: position.gpsValid,
+      coordsInRange,
+      locationSource: position.locationSource,
+      lbsCells: lbsCellsJson,
+      resolvedLbsLocation,
+      hasLbs,
+      parsedLatitude: position.latitude,
+      parsedLongitude: position.longitude,
+      batteryLevel: position.batteryLevel ?? null,
+      csq: position.csq ?? null,
+      satellites: position.satellites ?? null,
+      elevation: position.elevation,
+      direction: position.direction,
+      gpsTime: position.time,
+      source: 'TCP_HHD',
+    } satisfies Prisma.InputJsonObject;
+
     const commonDeviceData = {
       onlineStatus: 'ONLINE',
       lastConnectionAt: new Date(),
       updatedAt: new Date(),
-      metadata: {
-        gpsValid: position.gpsValid,
-        coordsInRange,
-        speed: position.speed,
-        elevation: position.elevation,
-        direction: position.direction,
-        gpsTime: position.time,
-        source: 'TCP_HHD',
-      },
+      metadata,
     };
 
-    const locationData = canUseLocation
+    const locationData = canUseGpsLocation
       ? {
           lastLocationLat: position.latitude,
           lastLocationLng: position.longitude,
         }
-      : {};
+      : canUseLbsLocation && lbsLocation
+        ? {
+            lastLocationLat: lbsLocation.latitude,
+            lastLocationLng: lbsLocation.longitude,
+          }
+        : {};
 
     await this.prisma.device.updateMany({
       where: {
@@ -235,33 +315,45 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       data: {
         id: randomUUID(),
         deviceId: terminalId,
-        latitude: canUseLocation ? position.latitude : null,
-        longitude: canUseLocation ? position.longitude : null,
+        latitude: canUseGpsLocation
+          ? position.latitude
+          : canUseLbsLocation && lbsLocation
+            ? lbsLocation.latitude
+            : null,
+        longitude: canUseGpsLocation
+          ? position.longitude
+          : canUseLbsLocation && lbsLocation
+            ? lbsLocation.longitude
+            : null,
         speed: position.speed,
-        rawPayload: {
-          rawHex,
-          gpsValid: position.gpsValid,
-          coordsInRange,
-          parsedLatitude: position.latitude,
-          parsedLongitude: position.longitude,
-          elevation: position.elevation,
-          direction: position.direction,
-          gpsTime: position.time,
-          source: 'TCP_HHD',
-        },
+        rawPayload,
         recordedAt: new Date(),
       },
     });
 
-    if (!canUseLocation) {
-      this.logger.warn(
-        `GPS no utilizable terminal=${terminalId}. gpsValid=${position.gpsValid} coordsInRange=${coordsInRange}. No se actualizó ubicación.`,
+    if (canUseGpsLocation) {
+      this.logger.debug(
+        `GPS real persistido terminal=${terminalId} lat=${position.latitude} lng=${position.longitude}`,
       );
       return;
     }
 
-    this.logger.debug(
-      `GPS persistido terminal=${terminalId} lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid}`,
+    if (canUseLbsLocation && lbsLocation) {
+      this.logger.debug(
+        `LBS persistido terminal=${terminalId} lat=${lbsLocation.latitude} lng=${lbsLocation.longitude} accuracy=${lbsLocation.accuracy ?? 'N/A'}`,
+      );
+      return;
+    }
+
+    if (hasLbs) {
+      this.logger.warn(
+        `LBS detectado terminal=${terminalId}, pero no se pudo resolver con Google.`,
+      );
+      return;
+    }
+
+    this.logger.warn(
+      `Ubicación no utilizable terminal=${terminalId}. source=${position.locationSource} gpsValid=${position.gpsValid} coordsInRange=${coordsInRange}.`,
     );
   }
 

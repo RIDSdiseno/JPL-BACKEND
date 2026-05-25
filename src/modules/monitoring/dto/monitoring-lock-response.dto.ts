@@ -7,5 +7,7 @@ export interface MonitoringLocksResponseDto {
     online: number;
     offline: number;
     alarm: number;
+    withLocation: number;
+    withoutLocation: number;
   };
 }
