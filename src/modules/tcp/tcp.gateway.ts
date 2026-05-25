@@ -78,7 +78,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     const parsed = parseHHDPacket(buffer);
 
     if (!parsed) {
-      this.logger.warn(`Paquete no reconocido: ${hex}`);
+      this.logger.warn(`Paquete no reconocido HEX=${hex}`);
       return;
     }
 
@@ -97,7 +97,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     this.logger.log(
       `Paquete recibido terminal=${parsed.terminalId} msgId=0x${parsed.msgId
         .toString(16)
-        .toUpperCase()}`,
+        .toUpperCase()} bytes=${buffer.length} HEX=${hex}`,
     );
 
     const pendingCommands = this.registry.consumePendingCommands(
@@ -112,12 +112,22 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     if (parsed.msgId === 0x0200 || parsed.msgId === 0x0210) {
       const position = parseHHDPosition(parsed.body);
 
+      this.logger.debug(
+        `Position body terminal=${parsed.terminalId} length=${
+          parsed.body.length
+        } bodyHEX=${parsed.body.toString('hex').toUpperCase()}`,
+      );
+
       if (position) {
         this.logger.log(
-          `GPS ${parsed.terminalId}: lat=${position.latitude} lng=${position.longitude}`,
+          `GPS ${parsed.terminalId}: lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid} speed=${position.speed} elevation=${position.elevation} status=${position.status} alarmFlag=${position.alarmFlag}`,
         );
 
         this.handleGpsPosition(parsed.terminalId, position);
+      } else {
+        this.logger.warn(
+          `No se pudo parsear posición terminal=${parsed.terminalId}`,
+        );
       }
     }
 
@@ -139,7 +149,6 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     );
 
     void this.prisma;
-    // Luego persistimos real en Prisma cuando definamos la tabla de ubicaciones.
   }
 
   private getSocketId(socket: net.Socket): string {
