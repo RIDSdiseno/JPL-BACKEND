@@ -5,6 +5,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import * as net from 'net';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '../../config/prisma/prisma.service';
 import {
   buildHHDResponse8001,
@@ -44,16 +45,30 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`Nueva conexión TCP: ${socketId}`);
 
       socket.on('data', (data: Buffer) => {
-        this.handleData(socket, data);
+        void this.handleData(socket, data);
       });
 
       socket.on('close', () => {
         this.logger.warn(`Conexión TCP cerrada: ${socketId}`);
+
+        const connection = this.registry.getConnectionBySocketId(socketId);
+
+        if (connection?.terminalId) {
+          void this.markDeviceOffline(connection.terminalId);
+        }
+
         this.registry.removeConnection(socketId);
       });
 
       socket.on('error', (error: Error) => {
         this.logger.error(`Error TCP ${socketId}: ${error.message}`);
+
+        const connection = this.registry.getConnectionBySocketId(socketId);
+
+        if (connection?.terminalId) {
+          void this.markDeviceOffline(connection.terminalId);
+        }
+
         this.registry.removeConnection(socketId);
       });
     });
@@ -67,7 +82,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     this.server?.close();
   }
 
-  private handleData(socket: net.Socket, buffer: Buffer): void {
+  private async handleData(socket: net.Socket, buffer: Buffer): Promise<void> {
     const socketId = this.getSocketId(socket);
     const ip = socket.remoteAddress ?? 'unknown';
     const remotePort = socket.remotePort;
@@ -93,6 +108,8 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       hex,
       receivedAt: new Date(),
     });
+
+    await this.markDeviceOnline(parsed.terminalId);
 
     this.logger.log(
       `Paquete recibido terminal=${parsed.terminalId} msgId=0x${parsed.msgId
@@ -123,7 +140,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
           `GPS ${parsed.terminalId}: lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid} speed=${position.speed} elevation=${position.elevation} status=${position.status} alarmFlag=${position.alarmFlag}`,
         );
 
-        this.handleGpsPosition(parsed.terminalId, position);
+        await this.handleGpsPosition(parsed.terminalId, position, hex);
       } else {
         this.logger.warn(
           `No se pudo parsear posición terminal=${parsed.terminalId}`,
@@ -140,10 +157,11 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     socket.write(response);
   }
 
-  private handleGpsPosition(
+  private async handleGpsPosition(
     terminalId: string,
     position: NonNullable<ReturnType<typeof parseHHDPosition>>,
-  ): void {
+    rawHex: string,
+  ): Promise<void> {
     this.registry.updateLastPosition(terminalId, {
       latitude: position.latitude,
       longitude: position.longitude,
@@ -154,11 +172,110 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       time: position.time,
     });
 
-    this.logger.debug(
-      `GPS procesado terminal=${terminalId} lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid}`,
-    );
+    const commonDeviceData = {
+      onlineStatus: 'ONLINE',
+      lastConnectionAt: new Date(),
+      updatedAt: new Date(),
+      metadata: {
+        gpsValid: position.gpsValid,
+        speed: position.speed,
+        elevation: position.elevation,
+        direction: position.direction,
+        gpsTime: position.time,
+        source: 'TCP_HHD',
+      },
+    };
 
-    void this.prisma;
+    const locationData = position.gpsValid
+      ? {
+          lastLocationLat: position.latitude,
+          lastLocationLng: position.longitude,
+        }
+      : {};
+
+    await this.prisma.device.updateMany({
+      where: {
+        OR: [
+          { deviceId: terminalId },
+          { imei: terminalId },
+          { serialNumber: terminalId },
+          { providerId: terminalId },
+        ],
+      },
+      data: {
+        ...commonDeviceData,
+        ...locationData,
+      },
+    });
+
+    await this.prisma.deviceTelemetry.create({
+      data: {
+        id: randomUUID(),
+        deviceId: terminalId,
+        latitude: position.gpsValid ? position.latitude : null,
+        longitude: position.gpsValid ? position.longitude : null,
+        speed: position.speed,
+        rawPayload: {
+          rawHex,
+          gpsValid: position.gpsValid,
+          parsedLatitude: position.latitude,
+          parsedLongitude: position.longitude,
+          elevation: position.elevation,
+          direction: position.direction,
+          gpsTime: position.time,
+          source: 'TCP_HHD',
+        },
+        recordedAt: new Date(),
+      },
+    });
+
+    if (!position.gpsValid) {
+      this.logger.warn(
+        `GPS inválido terminal=${terminalId}. No se actualizó lastLocationLat/lastLocationLng.`,
+      );
+      return;
+    }
+
+    this.logger.debug(
+      `GPS válido persistido terminal=${terminalId} lat=${position.latitude} lng=${position.longitude}`,
+    );
+  }
+
+  private async markDeviceOnline(terminalId: string): Promise<void> {
+    await this.prisma.device.updateMany({
+      where: {
+        OR: [
+          { deviceId: terminalId },
+          { imei: terminalId },
+          { serialNumber: terminalId },
+          { providerId: terminalId },
+        ],
+      },
+      data: {
+        onlineStatus: 'ONLINE',
+        lastConnectionAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+  }
+
+  private async markDeviceOffline(terminalId: string): Promise<void> {
+    await this.prisma.device.updateMany({
+      where: {
+        OR: [
+          { deviceId: terminalId },
+          { imei: terminalId },
+          { serialNumber: terminalId },
+          { providerId: terminalId },
+        ],
+      },
+      data: {
+        onlineStatus: 'OFFLINE',
+        updatedAt: new Date(),
+      },
+    });
+
+    this.logger.warn(`Dispositivo marcado OFFLINE terminal=${terminalId}`);
   }
 
   private getSocketId(socket: net.Socket): string {

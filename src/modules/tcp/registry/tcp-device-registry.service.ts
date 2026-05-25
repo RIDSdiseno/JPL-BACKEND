@@ -63,7 +63,6 @@ export class TcpDeviceRegistryService {
 
   touch(socketId: string): void {
     const connection = this.connectedDevices.get(socketId);
-
     if (!connection) return;
 
     connection.lastSeen = new Date();
@@ -72,7 +71,6 @@ export class TcpDeviceRegistryService {
 
   updateTerminalId(socketId: string, terminalId: string): void {
     const connection = this.connectedDevices.get(socketId);
-
     if (!connection) return;
 
     const normalizedTerminalId = terminalId.toUpperCase();
@@ -88,7 +86,6 @@ export class TcpDeviceRegistryService {
     position: Omit<TcpDevicePosition, 'receivedAt'>,
   ): void {
     const device = this.getDeviceByTerminalId(terminalId);
-
     if (!device) return;
 
     device.lastPosition = {
@@ -97,6 +94,10 @@ export class TcpDeviceRegistryService {
     };
 
     device.lastSeen = new Date();
+  }
+
+  getConnectionBySocketId(socketId: string): TcpDeviceConnection | undefined {
+    return this.connectedDevices.get(socketId);
   }
 
   getDeviceByTerminalId(terminalId: string): TcpDeviceConnection | undefined {
