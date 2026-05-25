@@ -126,7 +126,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       this.logger.log(`Comando pendiente enviado a ${parsed.terminalId}`);
     }
 
-    if (parsed.msgId === 0x0200 || parsed.msgId === 0x0210) {
+    if (parsed.msgId === 0x0200) {
       const position = parseHHDPosition(parsed.body);
 
       this.logger.debug(
@@ -148,6 +148,12 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       }
     }
 
+    if (parsed.msgId === 0x0210) {
+      this.logger.warn(
+        `Paquete histórico 0x0210 recibido terminal=${parsed.terminalId}. Se omite parseo GPS simple para evitar coordenadas inválidas.`,
+      );
+    }
+
     const response = buildHHDResponse8001(
       parsed.terminalId,
       parsed.serialNumber,
@@ -162,15 +168,24 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     position: NonNullable<ReturnType<typeof parseHHDPosition>>,
     rawHex: string,
   ): Promise<void> {
-    this.registry.updateLastPosition(terminalId, {
-      latitude: position.latitude,
-      longitude: position.longitude,
-      gpsValid: position.gpsValid,
-      speed: position.speed,
-      elevation: position.elevation,
-      direction: position.direction,
-      time: position.time,
-    });
+    const coordsInRange = this.isValidCoordinate(
+      position.latitude,
+      position.longitude,
+    );
+
+    const canUseLocation = position.gpsValid && coordsInRange;
+
+    if (canUseLocation) {
+      this.registry.updateLastPosition(terminalId, {
+        latitude: position.latitude,
+        longitude: position.longitude,
+        gpsValid: position.gpsValid,
+        speed: position.speed,
+        elevation: position.elevation,
+        direction: position.direction,
+        time: position.time,
+      });
+    }
 
     const commonDeviceData = {
       onlineStatus: 'ONLINE',
@@ -178,6 +193,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       updatedAt: new Date(),
       metadata: {
         gpsValid: position.gpsValid,
+        coordsInRange,
         speed: position.speed,
         elevation: position.elevation,
         direction: position.direction,
@@ -186,7 +202,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       },
     };
 
-    const locationData = position.gpsValid
+    const locationData = canUseLocation
       ? {
           lastLocationLat: position.latitude,
           lastLocationLng: position.longitude,
@@ -212,12 +228,13 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       data: {
         id: randomUUID(),
         deviceId: terminalId,
-        latitude: position.gpsValid ? position.latitude : null,
-        longitude: position.gpsValid ? position.longitude : null,
+        latitude: canUseLocation ? position.latitude : null,
+        longitude: canUseLocation ? position.longitude : null,
         speed: position.speed,
         rawPayload: {
           rawHex,
           gpsValid: position.gpsValid,
+          coordsInRange,
           parsedLatitude: position.latitude,
           parsedLongitude: position.longitude,
           elevation: position.elevation,
@@ -229,9 +246,9 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       },
     });
 
-    if (!position.gpsValid) {
+    if (!canUseLocation) {
       this.logger.warn(
-        `GPS inválido terminal=${terminalId}. No se actualizó lastLocationLat/lastLocationLng.`,
+        `GPS no utilizable terminal=${terminalId}. gpsValid=${position.gpsValid} coordsInRange=${coordsInRange}. No se actualizó ubicación.`,
       );
       return;
     }
@@ -276,6 +293,17 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     });
 
     this.logger.warn(`Dispositivo marcado OFFLINE terminal=${terminalId}`);
+  }
+
+  private isValidCoordinate(latitude: number, longitude: number): boolean {
+    return (
+      Number.isFinite(latitude) &&
+      Number.isFinite(longitude) &&
+      latitude >= -90 &&
+      latitude <= 90 &&
+      longitude >= -180 &&
+      longitude <= 180
+    );
   }
 
   private getSocketId(socket: net.Socket): string {
