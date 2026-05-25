@@ -137,7 +137,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
 
       if (position) {
         this.logger.log(
-          `GPS ${parsed.terminalId}: lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid} speed=${position.speed} elevation=${position.elevation} status=${position.status} alarmFlag=${position.alarmFlag}`,
+          `GPS ${parsed.terminalId}: lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid} coordsInRange=${position.coordsInRange} speed=${position.speed} elevation=${position.elevation} status=${position.status} alarmFlag=${position.alarmFlag}`,
         );
 
         await this.handleGpsPosition(parsed.terminalId, position, hex);
@@ -168,10 +168,9 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     position: NonNullable<ReturnType<typeof parseHHDPosition>>,
     rawHex: string,
   ): Promise<void> {
-    const coordsInRange = this.isValidCoordinate(
-      position.latitude,
-      position.longitude,
-    );
+    const coordsInRange =
+      position.coordsInRange &&
+      this.isValidCoordinate(position.latitude, position.longitude);
 
     const canUseLocation = position.gpsValid && coordsInRange;
 

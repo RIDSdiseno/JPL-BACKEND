@@ -18,6 +18,7 @@ export interface HHDPosition {
   isSealed: boolean;
   isShackleClosed: boolean;
   gpsValid: boolean;
+  coordsInRange: boolean;
 }
 
 function unescapeBuffer(buffer: Buffer): Buffer {
@@ -28,16 +29,13 @@ function unescapeBuffer(buffer: Buffer): Buffer {
 
     if (byte === 0x7d) {
       i++;
-
       if (i >= buffer.length) break;
 
       const next = buffer[i];
 
-      if (next === 0x02) {
-        result.push(0x7e);
-      } else if (next === 0x01) {
-        result.push(0x7d);
-      }
+      if (next === 0x02) result.push(0x7e);
+      else if (next === 0x01) result.push(0x7d);
+      else result.push(next);
     } else {
       result.push(byte);
     }
@@ -50,13 +48,9 @@ function escapeBuffer(buffer: Buffer): Buffer {
   const result: number[] = [];
 
   for (const byte of buffer) {
-    if (byte === 0x7e) {
-      result.push(0x7d, 0x02);
-    } else if (byte === 0x7d) {
-      result.push(0x7d, 0x01);
-    } else {
-      result.push(byte);
-    }
+    if (byte === 0x7e) result.push(0x7d, 0x02);
+    else if (byte === 0x7d) result.push(0x7d, 0x01);
+    else result.push(byte);
   }
 
   return Buffer.from(result);
@@ -72,24 +66,39 @@ function checksum(buffer: Buffer): number {
   return value;
 }
 
-function decodeCoordinate(raw: number): number {
-  const option1 = raw / 1_000_000;
-  const option2 = raw / 10_000_000;
-
-  if (option1 >= -90 && option1 <= 90) {
-    return option1;
-  }
-
-  return option2;
-}
-
 function decodeBcd(value: number): string {
   return value.toString(16).padStart(2, '0');
 }
 
+function decodeCoordinate(raw: number, type: 'lat' | 'lng'): number {
+  const primary = raw / 1_000_000;
+
+  if (type === 'lat' && primary >= 0 && primary <= 90) return primary;
+  if (type === 'lng' && primary >= 0 && primary <= 180) return primary;
+
+  return raw / 10_000_000;
+}
+
+function isValidCoordinate(latitude: number, longitude: number): boolean {
+  return (
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude) &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
+
+function isLikelyChileCoordinate(latitude: number, longitude: number): boolean {
+  return (
+    latitude >= -56 && latitude <= -17 && longitude >= -76 && longitude <= -66
+  );
+}
+
 export function parseHHDPacket(raw: Buffer): HHDPacket | null {
   try {
-    if (raw.length < 14) return null;
+    if (raw.length < 15) return null;
     if (raw[0] !== 0x7e || raw[raw.length - 1] !== 0x7e) return null;
 
     const content = raw.slice(1, raw.length - 1);
@@ -97,12 +106,25 @@ export function parseHHDPacket(raw: Buffer): HHDPacket | null {
 
     if (unescaped.length < 13) return null;
 
-    const msgId = unescaped.readUInt16BE(0);
-    const msgAttr = unescaped.readUInt16BE(2);
+    const packetWithoutChecksum = unescaped.slice(0, unescaped.length - 1);
+    const receivedChecksum = unescaped[unescaped.length - 1];
+    const calculatedChecksum = checksum(packetWithoutChecksum);
+
+    if (receivedChecksum !== calculatedChecksum) return null;
+
+    const msgId = packetWithoutChecksum.readUInt16BE(0);
+    const msgAttr = packetWithoutChecksum.readUInt16BE(2);
     const msgLength = msgAttr & 0x03ff;
-    const terminalId = unescaped.slice(4, 10).toString('hex').toUpperCase();
-    const serialNumber = unescaped.readUInt16BE(10);
-    const body = unescaped.slice(12, 12 + msgLength);
+
+    if (packetWithoutChecksum.length < 12 + msgLength) return null;
+
+    const terminalId = packetWithoutChecksum
+      .slice(4, 10)
+      .toString('hex')
+      .toUpperCase();
+
+    const serialNumber = packetWithoutChecksum.readUInt16BE(10);
+    const body = packetWithoutChecksum.slice(12, 12 + msgLength);
 
     return {
       msgId,
@@ -132,14 +154,20 @@ export function parseHHDPosition(body: Buffer): HHDPosition | null {
 
     const timeBuffer = body.slice(22, 28);
 
-    let latitude = decodeCoordinate(latRaw);
-    let longitude = decodeCoordinate(lonRaw);
+    let latitude = decodeCoordinate(latRaw, 'lat');
+    let longitude = decodeCoordinate(lonRaw, 'lng');
 
     const isSouth = ((status >> 2) & 1) === 1;
     const isWest = ((status >> 3) & 1) === 1;
 
-    if (isSouth) latitude = -latitude;
-    if (isWest) longitude = -longitude;
+    if (isSouth && latitude > 0) latitude = -latitude;
+    if (isWest && longitude > 0) longitude = -longitude;
+
+    const gpsValid = ((status >> 1) & 1) === 1;
+
+    const coordsInRange =
+      isValidCoordinate(latitude, longitude) &&
+      isLikelyChileCoordinate(latitude, longitude);
 
     return {
       alarmFlag,
@@ -156,7 +184,8 @@ export function parseHHDPosition(body: Buffer): HHDPosition | null {
       )}:${decodeBcd(timeBuffer[4])}:${decodeBcd(timeBuffer[5])}`,
       isSealed: ((status >> 14) & 1) === 1,
       isShackleClosed: ((status >> 15) & 1) === 1,
-      gpsValid: ((status >> 1) & 1) === 1,
+      gpsValid,
+      coordsInRange,
     };
   } catch {
     return null;
@@ -192,4 +221,16 @@ export function buildHHDResponse8001(
     Buffer.from([check]),
     Buffer.from([0x7e]),
   ]);
+}
+
+export function buildRawHHDCommand(command: string): Buffer {
+  return Buffer.from(command, 'utf8');
+}
+
+export function buildOpenCommand(): Buffer {
+  return buildRawHHDCommand('UNSEAL');
+}
+
+export function buildCloseCommand(): Buffer {
+  return buildRawHHDCommand('SEAL');
 }
