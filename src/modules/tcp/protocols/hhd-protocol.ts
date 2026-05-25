@@ -72,6 +72,21 @@ function checksum(buffer: Buffer): number {
   return value;
 }
 
+function decodeCoordinate(raw: number): number {
+  const option1 = raw / 1_000_000;
+  const option2 = raw / 10_000_000;
+
+  if (option1 >= -90 && option1 <= 90) {
+    return option1;
+  }
+
+  return option2;
+}
+
+function decodeBcd(value: number): string {
+  return value.toString(16).padStart(2, '0');
+}
+
 export function parseHHDPacket(raw: Buffer): HHDPacket | null {
   try {
     if (raw.length < 14) return null;
@@ -117,29 +132,28 @@ export function parseHHDPosition(body: Buffer): HHDPosition | null {
 
     const timeBuffer = body.slice(22, 28);
 
-    const latitude = latRaw / 1_000_000;
-    const longitude = lonRaw / 1_000_000;
+    let latitude = decodeCoordinate(latRaw);
+    let longitude = decodeCoordinate(lonRaw);
 
     const isSouth = ((status >> 2) & 1) === 1;
     const isWest = ((status >> 3) & 1) === 1;
 
+    if (isSouth) latitude = -latitude;
+    if (isWest) longitude = -longitude;
+
     return {
       alarmFlag,
       status,
-      latitude: isSouth ? -latitude : latitude,
-      longitude: isWest ? -longitude : longitude,
+      latitude,
+      longitude,
       elevation,
       speed: speed / 10,
       direction,
-      time: `20${timeBuffer[0].toString(16).padStart(2, '0')}-${timeBuffer[1]
-        .toString(16)
-        .padStart(2, '0')}-${timeBuffer[2]
-        .toString(16)
-        .padStart(2, '0')} ${timeBuffer[3]
-        .toString(16)
-        .padStart(2, '0')}:${timeBuffer[4]
-        .toString(16)
-        .padStart(2, '0')}:${timeBuffer[5].toString(16).padStart(2, '0')}`,
+      time: `20${decodeBcd(timeBuffer[0])}-${decodeBcd(
+        timeBuffer[1],
+      )}-${decodeBcd(timeBuffer[2])} ${decodeBcd(
+        timeBuffer[3],
+      )}:${decodeBcd(timeBuffer[4])}:${decodeBcd(timeBuffer[5])}`,
       isSealed: ((status >> 14) & 1) === 1,
       isShackleClosed: ((status >> 15) & 1) === 1,
       gpsValid: ((status >> 1) & 1) === 1,
@@ -170,43 +184,6 @@ export function buildHHDResponse8001(
   header.writeUInt16BE(0x0001, 10);
 
   const packet = Buffer.concat([header, body]);
-  const check = checksum(packet);
-
-  return Buffer.concat([
-    Buffer.from([0x7e]),
-    escapeBuffer(packet),
-    Buffer.from([check]),
-    Buffer.from([0x7e]),
-  ]);
-}
-
-export function buildSealCommand(
-  terminalId: string,
-  serialNumber: number,
-  seal: boolean,
-  operatorName = 'admin',
-): Buffer {
-  const sealByte = Buffer.from([seal ? 0x01 : 0x00]);
-  const operatorBytes = Buffer.from(operatorName, 'utf8');
-
-  const commandBody = Buffer.concat([
-    Buffer.from([0x01]),
-    Buffer.from([0x24]),
-    Buffer.from([sealByte.length + operatorBytes.length]),
-    sealByte,
-    operatorBytes,
-  ]);
-
-  const header = Buffer.alloc(12);
-
-  header.writeUInt16BE(0x0310, 0);
-  header.writeUInt16BE(commandBody.length, 2);
-
-  Buffer.from(terminalId, 'hex').copy(header, 4);
-
-  header.writeUInt16BE(serialNumber, 10);
-
-  const packet = Buffer.concat([header, commandBody]);
   const check = checksum(packet);
 
   return Buffer.concat([
