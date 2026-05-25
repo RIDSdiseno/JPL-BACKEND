@@ -59,9 +59,7 @@ function escapeBuffer(buffer: Buffer): Buffer {
 function checksum(buffer: Buffer): number {
   let value = 0;
 
-  for (const byte of buffer) {
-    value ^= byte;
-  }
+  for (const byte of buffer) value ^= byte;
 
   return value;
 }
@@ -110,7 +108,13 @@ export function parseHHDPacket(raw: Buffer): HHDPacket | null {
     const receivedChecksum = unescaped[unescaped.length - 1];
     const calculatedChecksum = checksum(packetWithoutChecksum);
 
-    if (receivedChecksum !== calculatedChecksum) return null;
+    if (receivedChecksum !== calculatedChecksum) {
+      console.warn(
+        `Checksum distinto recibido=${receivedChecksum.toString(
+          16,
+        )} calculado=${calculatedChecksum.toString(16)}`,
+      );
+    }
 
     const msgId = packetWithoutChecksum.readUInt16BE(0);
     const msgAttr = packetWithoutChecksum.readUInt16BE(2);
@@ -223,14 +227,16 @@ export function buildHHDResponse8001(
   ]);
 }
 
-export function buildRawHHDCommand(command: string): Buffer {
-  return Buffer.from(command, 'utf8');
+export function buildOpenCommand(terminalId: string): Buffer {
+  return Buffer.from(
+    `7E03100009${terminalId.toUpperCase()}20460124060061646D696EEE7E`,
+    'hex',
+  );
 }
 
-export function buildOpenCommand(): Buffer {
-  return buildRawHHDCommand('UNSEAL');
-}
-
-export function buildCloseCommand(): Buffer {
-  return buildRawHHDCommand('SEAL');
+export function buildCloseCommand(terminalId: string): Buffer {
+  return Buffer.from(
+    `7E03100009${terminalId.toUpperCase()}20460124060061646D696EEF7E`,
+    'hex',
+  );
 }

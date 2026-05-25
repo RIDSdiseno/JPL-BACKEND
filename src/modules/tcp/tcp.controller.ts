@@ -75,7 +75,7 @@ export class TcpController {
   ) {
     const normalizedTerminalId = terminalId.toUpperCase();
     const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
-    const command = buildOpenCommand();
+    const command = buildOpenCommand(normalizedTerminalId);
 
     if (device?.socket && !device.socket.destroyed) {
       device.socket.write(command);
@@ -88,6 +88,7 @@ export class TcpController {
           sent: true,
           queued: false,
           operatorName: body?.operatorName ?? 'admin',
+          hexSent: command.toString('hex').toUpperCase(),
           message: 'Comando ABRIR enviado por TCP',
         },
       };
@@ -103,6 +104,7 @@ export class TcpController {
         sent: false,
         queued: true,
         operatorName: body?.operatorName ?? 'admin',
+        hexSent: command.toString('hex').toUpperCase(),
         message: 'Comando ABRIR encolado hasta que el candado se conecte',
       },
     };
@@ -115,7 +117,7 @@ export class TcpController {
   ) {
     const normalizedTerminalId = terminalId.toUpperCase();
     const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
-    const command = buildCloseCommand();
+    const command = buildCloseCommand(normalizedTerminalId);
 
     if (device?.socket && !device.socket.destroyed) {
       device.socket.write(command);
@@ -128,6 +130,7 @@ export class TcpController {
           sent: true,
           queued: false,
           operatorName: body?.operatorName ?? 'admin',
+          hexSent: command.toString('hex').toUpperCase(),
           message: 'Comando CERRAR enviado por TCP',
         },
       };
@@ -143,6 +146,7 @@ export class TcpController {
         sent: false,
         queued: true,
         operatorName: body?.operatorName ?? 'admin',
+        hexSent: command.toString('hex').toUpperCase(),
         message: 'Comando CERRAR encolado hasta que el candado se conecte',
       },
     };

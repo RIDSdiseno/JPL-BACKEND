@@ -48,6 +48,10 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
         void this.handleData(socket, data);
       });
 
+      socket.on('end', () => {
+        this.logger.warn(`Socket END recibido: ${socketId}`);
+      });
+
       socket.on('close', () => {
         this.logger.warn(`Conexión TCP cerrada: ${socketId}`);
 
@@ -123,7 +127,11 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
 
     for (const command of pendingCommands) {
       socket.write(command);
-      this.logger.log(`Comando pendiente enviado a ${parsed.terminalId}`);
+      this.logger.log(
+        `Comando pendiente enviado a ${
+          parsed.terminalId
+        } HEX=${command.toString('hex').toUpperCase()}`,
+      );
     }
 
     if (parsed.msgId === 0x0200) {
@@ -172,7 +180,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       position.coordsInRange &&
       this.isValidCoordinate(position.latitude, position.longitude);
 
-    const canUseLocation = position.gpsValid && coordsInRange;
+    const canUseLocation = coordsInRange;
 
     if (canUseLocation) {
       this.registry.updateLastPosition(terminalId, {
@@ -253,7 +261,7 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     }
 
     this.logger.debug(
-      `GPS válido persistido terminal=${terminalId} lat=${position.latitude} lng=${position.longitude}`,
+      `GPS persistido terminal=${terminalId} lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid}`,
     );
   }
 
