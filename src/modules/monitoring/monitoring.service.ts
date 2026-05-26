@@ -12,18 +12,27 @@ interface DeviceMetadata {
   gpsValid?: boolean;
   coordsInRange?: boolean;
   locationSource?: MonitoringLocationSource;
+
+  locationStatusCode?: number;
+  gpsPositionStatus?: number;
+
   resolvedLbsLocation?: {
     latitude?: number;
     longitude?: number;
     accuracy?: number | null;
     source?: 'LBS';
   } | null;
+
   batteryLevel?: number | null;
+  batteryVoltage?: number | null;
+
   csq?: number | null;
   satellites?: number | null;
+
   speed?: number | null;
   elevation?: number | null;
   direction?: number | null;
+
   gpsTime?: string | null;
   source?: string;
 }
@@ -86,10 +95,13 @@ export class MonitoringService {
           longitude,
 
           battery: this.toNullableNumber(metadata.batteryLevel),
+          batteryVoltage: this.toNullableNumber(metadata.batteryVoltage),
+
           speed:
             this.toNullableNumber(lastPosition?.speed) ??
             this.toNullableNumber(metadata.speed) ??
             0,
+
           altitude:
             this.toNullableNumber(lastPosition?.elevation) ??
             this.toNullableNumber(metadata.elevation) ??
@@ -102,6 +114,13 @@ export class MonitoringService {
           locationSource,
           gpsValid: lastPosition?.gpsValid ?? metadata.gpsValid ?? false,
           coordsInRange: metadata.coordsInRange ?? hasLocation,
+
+          locationStatusCode:
+            this.toNullableNumber(metadata.locationStatusCode) ?? undefined,
+
+          gpsPositionStatus:
+            this.toNullableNumber(metadata.gpsPositionStatus) ?? undefined,
+
           locationAccuracy:
             this.toNullableNumber(metadata.resolvedLbsLocation?.accuracy) ??
             undefined,

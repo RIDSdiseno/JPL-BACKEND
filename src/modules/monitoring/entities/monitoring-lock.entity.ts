@@ -12,6 +12,8 @@ export interface MonitoringLockEntity {
   longitude: number | null;
 
   battery: number | null;
+  batteryVoltage: number | null;
+
   speed: number;
   altitude?: number;
   floor?: number;
@@ -22,6 +24,9 @@ export interface MonitoringLockEntity {
   gpsValid: boolean;
   coordsInRange: boolean;
   locationAccuracy?: number;
+
+  locationStatusCode?: number;
+  gpsPositionStatus?: number;
 
   satellites?: number;
   csq?: number;

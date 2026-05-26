@@ -28,8 +28,11 @@ export interface HHDPosition {
   gpsValid: boolean;
   coordsInRange: boolean;
   locationSource: 'GPS' | 'LBS' | 'WIFI' | 'INVALID';
+  locationStatusCode: 0 | 1 | 2 | 3;
+  gpsPositionStatus: 0 | 1 | 2 | 3;
   lbsCells: HHDLbsCell[];
   batteryLevel?: number;
+  batteryVoltage?: number;
   csq?: number;
   satellites?: number;
 }
@@ -85,7 +88,11 @@ function escapeBuffer(buffer: Buffer): Buffer {
 
 function checksum(buffer: Buffer): number {
   let value = 0;
-  for (const byte of buffer) value ^= byte;
+
+  for (const byte of buffer) {
+    value ^= byte;
+  }
+
   return value;
 }
 
@@ -114,6 +121,12 @@ function isLikelyChileCoordinate(latitude: number, longitude: number): boolean {
   );
 }
 
+function intTo1Byte(value: number): Buffer {
+  const buffer = Buffer.alloc(1);
+  buffer.writeUInt8(value);
+  return buffer;
+}
+
 function intTo2Bytes(value: number): Buffer {
   const buffer = Buffer.alloc(2);
   buffer.writeUInt16BE(value);
@@ -124,6 +137,18 @@ function intTo4Bytes(value: number): Buffer {
   const buffer = Buffer.alloc(4);
   buffer.writeUInt32BE(value);
   return buffer;
+}
+
+function normalizeTerminalId(terminalId: string): string {
+  const normalizedTerminalId = terminalId.toUpperCase();
+
+  if (!/^[0-9A-F]{12}$/.test(normalizedTerminalId)) {
+    throw new Error(
+      `terminalId inválido para JT808. Debe tener 12 caracteres HEX: ${terminalId}`,
+    );
+  }
+
+  return normalizedTerminalId;
 }
 
 function build0310Param(parameterIdHex: string, content: Buffer): Buffer {
@@ -140,13 +165,7 @@ function buildJT808Message(
   body: Buffer,
   serialNumber = getNextSerialNumber(),
 ): Buffer {
-  const normalizedTerminalId = terminalId.toUpperCase();
-
-  if (!/^[0-9A-F]{12}$/.test(normalizedTerminalId)) {
-    throw new Error(
-      `terminalId inválido para JT808. Debe tener 12 caracteres HEX: ${terminalId}`,
-    );
-  }
+  const normalizedTerminalId = normalizeTerminalId(terminalId);
 
   const header = Buffer.alloc(12);
 
@@ -254,12 +273,28 @@ function parseLbsAttribute66(hex: string): HHDLbsCell[] {
   }
 }
 
+function normalizeBatteryPercent(value: number): number {
+  if (value <= 100) return value;
+
+  if (value <= 1000) {
+    return Math.round(value / 10);
+  }
+
+  if (value <= 10000) {
+    return Math.round(value / 100);
+  }
+
+  return value;
+}
+
 function parseHhdAttributes(body: Buffer) {
   const result: {
     lbsCells: HHDLbsCell[];
     batteryLevel?: number;
+    batteryVoltage?: number;
     csq?: number;
     satellites?: number;
+    hasWifi?: boolean;
   } = {
     lbsCells: [],
   };
@@ -282,15 +317,33 @@ function parseHhdAttributes(body: Buffer) {
     }
 
     if (attributeId === 0x69 && value.length >= 2) {
-      result.batteryLevel = value.readUInt16BE(0);
+      const raw = value.readUInt16BE(0);
+
+      // En el SDK este atributo aparece como BatteryVoltage.
+      // En varios equipos viene como centivoltios: 0192 = 402 = 4.02V.
+      result.batteryVoltage = raw / 100;
     }
 
     if (attributeId === 0x6a && value.length >= 1) {
+      // En los paquetes reales este valor llega como 0x17/0x18.
+      // Lo dejamos como CSQ, porque coincide con rango de señal GSM.
       result.csq = value.readUInt8(0);
     }
 
     if (attributeId === 0x6b && value.length >= 1) {
       result.satellites = value.readUInt8(0);
+    }
+
+    if (attributeId === 0x8b && value.length >= 1) {
+      const raw =
+        value.length >= 2 ? value.readUInt16BE(0) : value.readUInt8(0);
+
+      result.batteryLevel = normalizeBatteryPercent(raw);
+    }
+
+    // Atributo 0x64 suele venir asociado a WiFi MAC en el SDK.
+    if (attributeId === 0x64 && value.length > 0) {
+      result.hasWifi = true;
     }
 
     offset += length;
@@ -380,11 +433,36 @@ export function parseHHDPosition(body: Buffer): HHDPosition | null {
 
     const attributes = parseHhdAttributes(body);
 
-    const locationSource: HHDPosition['locationSource'] = gpsValid
-      ? 'GPS'
-      : attributes.lbsCells.length > 0
-        ? 'LBS'
-        : 'INVALID';
+    let locationSource: HHDPosition['locationSource'] = 'INVALID';
+    let locationStatusCode: HHDPosition['locationStatusCode'] = 0;
+    let gpsPositionStatus: HHDPosition['gpsPositionStatus'] = 0;
+
+    if (gpsValid) {
+      locationSource = 'GPS';
+      locationStatusCode = 1;
+      gpsPositionStatus = 1;
+    } else if (attributes.hasWifi) {
+      locationSource = 'WIFI';
+      locationStatusCode = 2;
+      gpsPositionStatus = 2;
+    } else if (attributes.lbsCells.length > 0) {
+      locationSource = 'LBS';
+      locationStatusCode = 3;
+      gpsPositionStatus = 3;
+    }
+
+    const batteryLevel =
+      typeof attributes.batteryLevel === 'number'
+        ? attributes.batteryLevel
+        : typeof attributes.batteryVoltage === 'number'
+          ? Math.min(
+              100,
+              Math.max(
+                0,
+                Math.round(((attributes.batteryVoltage - 3.3) / 0.9) * 100),
+              ),
+            )
+          : undefined;
 
     return {
       alarmFlag,
@@ -404,8 +482,11 @@ export function parseHHDPosition(body: Buffer): HHDPosition | null {
       gpsValid,
       coordsInRange,
       locationSource,
+      locationStatusCode,
+      gpsPositionStatus,
       lbsCells: attributes.lbsCells,
-      batteryLevel: attributes.batteryLevel,
+      batteryLevel,
+      batteryVoltage: attributes.batteryVoltage,
       csq: attributes.csq,
       satellites: attributes.satellites,
     };
@@ -439,6 +520,38 @@ export function buildEnableTrackingCommand(
   const heartbeatIntervalSeconds = options?.heartbeatIntervalSeconds ?? 60;
 
   const params = [
+    build0310Param('06', intTo4Bytes(timeIntervalSeconds)),
+    build0310Param('08', intTo2Bytes(heartbeatIntervalSeconds)),
+  ];
+
+  const body = Buffer.concat([Buffer.from([params.length]), ...params]);
+
+  return buildJT808Message(0x0310, terminalId, body);
+}
+
+export function buildForceGpsCommand(
+  terminalId: string,
+  options?: {
+    timeIntervalSeconds?: number;
+    heartbeatIntervalSeconds?: number;
+    positionAccuracyMeters?: number;
+    gnssPositionQuality?: number;
+    locationStatus?: number;
+  },
+): Buffer {
+  const timeIntervalSeconds = options?.timeIntervalSeconds ?? 30;
+  const heartbeatIntervalSeconds = options?.heartbeatIntervalSeconds ?? 60;
+  const positionAccuracyMeters = options?.positionAccuracyMeters ?? 10;
+
+  // Valores experimentales basados en el SDK:
+  // 2C = GNSSPositionQuality, 18 = LocationStatus, 17 = PositionAccuracy.
+  const gnssPositionQuality = options?.gnssPositionQuality ?? 1;
+  const locationStatus = options?.locationStatus ?? 1;
+
+  const params = [
+    build0310Param('2C', intTo1Byte(gnssPositionQuality)),
+    build0310Param('18', intTo1Byte(locationStatus)),
+    build0310Param('17', intTo2Bytes(positionAccuracyMeters)),
     build0310Param('06', intTo4Bytes(timeIntervalSeconds)),
     build0310Param('08', intTo2Bytes(heartbeatIntervalSeconds)),
   ];

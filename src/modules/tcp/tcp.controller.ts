@@ -11,6 +11,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import {
   buildCloseCommand,
   buildEnableTrackingCommand,
+  buildForceGpsCommand,
   buildOpenCommand,
 } from './protocols/hhd-protocol';
 import { TcpDeviceRegistryService } from './registry/tcp-device-registry.service';
@@ -125,14 +126,14 @@ export class TcpController {
     const normalizedTerminalId = terminalId.toUpperCase();
     const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
 
-    const timeIntervalSeconds = this.normalizeInterval(
+    const timeIntervalSeconds = this.normalizeNumber(
       body?.timeIntervalSeconds,
       30,
       10,
       86_400,
     );
 
-    const heartbeatIntervalSeconds = this.normalizeInterval(
+    const heartbeatIntervalSeconds = this.normalizeNumber(
       body?.heartbeatIntervalSeconds,
       60,
       10,
@@ -160,6 +161,79 @@ export class TcpController {
     });
   }
 
+  @Post('devices/:terminalId/force-gps')
+  forceGps(
+    @Param('terminalId') terminalId: string,
+    @Body()
+    body?: {
+      timeIntervalSeconds?: number;
+      heartbeatIntervalSeconds?: number;
+      positionAccuracyMeters?: number;
+      gnssPositionQuality?: number;
+      locationStatus?: number;
+      operatorName?: string;
+    },
+  ) {
+    const normalizedTerminalId = terminalId.toUpperCase();
+    const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
+
+    const timeIntervalSeconds = this.normalizeNumber(
+      body?.timeIntervalSeconds,
+      30,
+      10,
+      86_400,
+    );
+
+    const heartbeatIntervalSeconds = this.normalizeNumber(
+      body?.heartbeatIntervalSeconds,
+      60,
+      10,
+      86_400,
+    );
+
+    const positionAccuracyMeters = this.normalizeNumber(
+      body?.positionAccuracyMeters,
+      10,
+      1,
+      500,
+    );
+
+    const gnssPositionQuality = this.normalizeNumber(
+      body?.gnssPositionQuality,
+      1,
+      0,
+      10,
+    );
+
+    const locationStatus = this.normalizeNumber(body?.locationStatus, 1, 0, 10);
+
+    const command = buildForceGpsCommand(normalizedTerminalId, {
+      timeIntervalSeconds,
+      heartbeatIntervalSeconds,
+      positionAccuracyMeters,
+      gnssPositionQuality,
+      locationStatus,
+    });
+
+    return this.sendOrQueueCommand({
+      terminalId: normalizedTerminalId,
+      command,
+      device,
+      action: 'FORCE_GPS',
+      operatorName: body?.operatorName,
+      sentMessage: 'Comando GPS forzado enviado por TCP',
+      queuedMessage:
+        'Comando GPS forzado encolado hasta que el candado se conecte',
+      extraData: {
+        timeIntervalSeconds,
+        heartbeatIntervalSeconds,
+        positionAccuracyMeters,
+        gnssPositionQuality,
+        locationStatus,
+      },
+    });
+  }
+
   private sendOrQueueCommand(args: {
     terminalId: string;
     command: Buffer;
@@ -169,7 +243,7 @@ export class TcpController {
         write: (buffer: Buffer) => void;
       };
     };
-    action: 'OPEN' | 'CLOSE' | 'ENABLE_TRACKING';
+    action: 'OPEN' | 'CLOSE' | 'ENABLE_TRACKING' | 'FORCE_GPS';
     operatorName?: string;
     sentMessage: string;
     queuedMessage: string;
@@ -221,7 +295,7 @@ export class TcpController {
     };
   }
 
-  private normalizeInterval(
+  private normalizeNumber(
     value: unknown,
     fallback: number,
     min: number,

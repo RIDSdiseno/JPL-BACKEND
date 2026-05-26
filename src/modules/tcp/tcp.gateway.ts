@@ -9,6 +9,8 @@ import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../config/prisma/prisma.service';
 import {
+  buildEnableTrackingCommand,
+  buildForceGpsCommand,
   buildHHDResponse8001,
   parseHHDPacket,
   parseHHDPosition,
@@ -89,6 +91,116 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     this.server?.close();
   }
 
+  sendEnableTrackingCommand(
+    terminalId: string,
+    options?: {
+      timeIntervalSeconds?: number;
+      heartbeatIntervalSeconds?: number;
+    },
+  ) {
+    const normalizedTerminalId = terminalId.toUpperCase();
+    const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
+
+    const timeIntervalSeconds = options?.timeIntervalSeconds ?? 30;
+    const heartbeatIntervalSeconds = options?.heartbeatIntervalSeconds ?? 60;
+
+    const command = buildEnableTrackingCommand(normalizedTerminalId, {
+      timeIntervalSeconds,
+      heartbeatIntervalSeconds,
+    });
+
+    if (device?.socket && !device.socket.destroyed) {
+      device.socket.write(command);
+
+      return {
+        terminalId: normalizedTerminalId,
+        action: 'ENABLE_TRACKING',
+        sent: true,
+        queued: false,
+        hexSent: command.toString('hex').toUpperCase(),
+        message: `Configuración de tracking enviada por TCP cada ${timeIntervalSeconds}s`,
+        timeIntervalSeconds,
+        heartbeatIntervalSeconds,
+      };
+    }
+
+    this.registry.queueCommand(normalizedTerminalId, command);
+
+    return {
+      terminalId: normalizedTerminalId,
+      action: 'ENABLE_TRACKING',
+      sent: false,
+      queued: true,
+      hexSent: command.toString('hex').toUpperCase(),
+      message:
+        'Configuración de tracking encolada hasta que el candado se conecte',
+      timeIntervalSeconds,
+      heartbeatIntervalSeconds,
+    };
+  }
+
+  sendForceGpsCommand(
+    terminalId: string,
+    options?: {
+      timeIntervalSeconds?: number;
+      heartbeatIntervalSeconds?: number;
+      positionAccuracyMeters?: number;
+      gnssPositionQuality?: number;
+      locationStatus?: number;
+    },
+  ) {
+    const normalizedTerminalId = terminalId.toUpperCase();
+    const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
+
+    const timeIntervalSeconds = options?.timeIntervalSeconds ?? 30;
+    const heartbeatIntervalSeconds = options?.heartbeatIntervalSeconds ?? 60;
+    const positionAccuracyMeters = options?.positionAccuracyMeters ?? 10;
+    const gnssPositionQuality = options?.gnssPositionQuality ?? 1;
+    const locationStatus = options?.locationStatus ?? 1;
+
+    const command = buildForceGpsCommand(normalizedTerminalId, {
+      timeIntervalSeconds,
+      heartbeatIntervalSeconds,
+      positionAccuracyMeters,
+      gnssPositionQuality,
+      locationStatus,
+    });
+
+    if (device?.socket && !device.socket.destroyed) {
+      device.socket.write(command);
+
+      return {
+        terminalId: normalizedTerminalId,
+        action: 'FORCE_GPS',
+        sent: true,
+        queued: false,
+        hexSent: command.toString('hex').toUpperCase(),
+        message: 'Comando GPS forzado enviado por TCP',
+        timeIntervalSeconds,
+        heartbeatIntervalSeconds,
+        positionAccuracyMeters,
+        gnssPositionQuality,
+        locationStatus,
+      };
+    }
+
+    this.registry.queueCommand(normalizedTerminalId, command);
+
+    return {
+      terminalId: normalizedTerminalId,
+      action: 'FORCE_GPS',
+      sent: false,
+      queued: true,
+      hexSent: command.toString('hex').toUpperCase(),
+      message: 'Comando GPS forzado encolado hasta que el candado se conecte',
+      timeIntervalSeconds,
+      heartbeatIntervalSeconds,
+      positionAccuracyMeters,
+      gnssPositionQuality,
+      locationStatus,
+    };
+  }
+
   private async handleData(socket: net.Socket, buffer: Buffer): Promise<void> {
     const socketId = this.getSocketId(socket);
     const ip = socket.remoteAddress ?? 'unknown';
@@ -148,7 +260,19 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
 
       if (position) {
         this.logger.log(
-          `GPS ${parsed.terminalId}: lat=${position.latitude} lng=${position.longitude} gpsValid=${position.gpsValid} source=${position.locationSource} lbsCells=${position.lbsCells.length} satellites=${position.satellites ?? 'N/A'} csq=${position.csq ?? 'N/A'} battery=${position.batteryLevel ?? 'N/A'} speed=${position.speed} status=${position.status}`,
+          `GPS ${parsed.terminalId}: lat=${position.latitude} lng=${
+            position.longitude
+          } gpsValid=${position.gpsValid} source=${
+            position.locationSource
+          } locationStatus=${position.locationStatusCode} gpsPositionStatus=${
+            position.gpsPositionStatus
+          } lbsCells=${position.lbsCells.length} satellites=${
+            position.satellites ?? 'N/A'
+          } csq=${position.csq ?? 'N/A'} battery=${
+            position.batteryLevel ?? 'N/A'
+          } batteryVoltage=${position.batteryVoltage ?? 'N/A'} speed=${
+            position.speed
+          } status=${position.status}`,
         );
 
         await this.handleGpsPosition(parsed.terminalId, position, hex);
@@ -162,6 +286,14 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     if (parsed.msgId === 0x0210) {
       this.logger.warn(
         `Paquete histórico 0x0210 recibido terminal=${parsed.terminalId}. Se omite parseo GPS simple para evitar coordenadas inválidas.`,
+      );
+    }
+
+    if (parsed.msgId === 0x0311) {
+      this.logger.log(
+        `Respuesta comando 0310 terminal=${
+          parsed.terminalId
+        } bodyHEX=${parsed.body.toString('hex').toUpperCase()}`,
       );
     }
 
@@ -246,9 +378,12 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
         : canUseLbsLocation
           ? 'LBS'
           : position.locationSource,
+      locationStatusCode: position.locationStatusCode,
+      gpsPositionStatus: position.gpsPositionStatus,
       lbsCells: lbsCellsJson,
       resolvedLbsLocation,
       batteryLevel: position.batteryLevel ?? null,
+      batteryVoltage: position.batteryVoltage ?? null,
       csq: position.csq ?? null,
       satellites: position.satellites ?? null,
       speed: position.speed,
@@ -263,12 +398,15 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       gpsValid: position.gpsValid,
       coordsInRange,
       locationSource: position.locationSource,
+      locationStatusCode: position.locationStatusCode,
+      gpsPositionStatus: position.gpsPositionStatus,
       lbsCells: lbsCellsJson,
       resolvedLbsLocation,
       hasLbs,
       parsedLatitude: position.latitude,
       parsedLongitude: position.longitude,
       batteryLevel: position.batteryLevel ?? null,
+      batteryVoltage: position.batteryVoltage ?? null,
       csq: position.csq ?? null,
       satellites: position.satellites ?? null,
       elevation: position.elevation,
