@@ -13,6 +13,7 @@ import {
   buildEnableTrackingCommand,
   buildForceGpsCommand,
   buildOpenCommand,
+  buildReadGpsStatusCommand,
 } from './protocols/hhd-protocol';
 import { TcpDeviceRegistryService } from './registry/tcp-device-registry.service';
 
@@ -234,6 +235,27 @@ export class TcpController {
     });
   }
 
+  @Post('devices/:terminalId/read-gps-status')
+  readGpsStatus(
+    @Param('terminalId') terminalId: string,
+    @Body() body?: { operatorName?: string },
+  ) {
+    const normalizedTerminalId = terminalId.toUpperCase();
+    const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
+    const command = buildReadGpsStatusCommand(normalizedTerminalId);
+
+    return this.sendOrQueueCommand({
+      terminalId: normalizedTerminalId,
+      command,
+      device,
+      action: 'READ_GPS_STATUS',
+      operatorName: body?.operatorName,
+      sentMessage: 'Lectura de estado GPS enviada por TCP',
+      queuedMessage:
+        'Lectura de estado GPS encolada hasta que el candado se conecte',
+    });
+  }
+
   private sendOrQueueCommand(args: {
     terminalId: string;
     command: Buffer;
@@ -243,7 +265,12 @@ export class TcpController {
         write: (buffer: Buffer) => void;
       };
     };
-    action: 'OPEN' | 'CLOSE' | 'ENABLE_TRACKING' | 'FORCE_GPS';
+    action:
+      | 'OPEN'
+      | 'CLOSE'
+      | 'ENABLE_TRACKING'
+      | 'FORCE_GPS'
+      | 'READ_GPS_STATUS';
     operatorName?: string;
     sentMessage: string;
     queuedMessage: string;

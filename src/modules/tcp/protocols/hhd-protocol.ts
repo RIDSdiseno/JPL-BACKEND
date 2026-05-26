@@ -561,6 +561,83 @@ export function buildForceGpsCommand(
   return buildJT808Message(0x0310, terminalId, body);
 }
 
+export function buildReadGpsStatusCommand(terminalId: string): Buffer {
+  const parameterIds = [
+    '94', // BatteryVoltage
+    '97', // GPSlocationInfo
+    '2C', // GNSSPositionQuality
+    '18', // LocationStatus
+    '17', // PositionAccuracy
+    '71', // RealTimeLocStatus
+    '96', // DeviceStatus
+    '8B', // TerminalAlarmBatteryLevel
+  ];
+
+  const body = Buffer.concat([
+    Buffer.from([0x00, parameterIds.length]),
+    Buffer.from(parameterIds.join(''), 'hex'),
+  ]);
+
+  return buildJT808Message(0x0312, terminalId, body);
+}
+
+export function parseHHDParameterReport0313(body: Buffer) {
+  const result: Record<string, string | number> = {};
+
+  if (body.length < 3) {
+    return result;
+  }
+
+  const flowId = body.readUInt16BE(0);
+  const parameterCount = body.readUInt8(2);
+
+  result.flowId = flowId;
+  result.parameterCount = parameterCount;
+
+  let offset = 3;
+
+  const parameterNames: Record<number, string> = {
+    0x94: 'BatteryVoltage',
+    0x97: 'GPSlocationInfo',
+    0x2c: 'GNSSPositionQuality',
+    0x18: 'LocationStatus',
+    0x17: 'PositionAccuracy',
+    0x71: 'RealTimeLocStatus',
+    0x96: 'DeviceStatus',
+    0x8b: 'TerminalAlarmBatteryLevel',
+  };
+
+  for (let i = 0; i < parameterCount; i++) {
+    if (offset + 2 > body.length) break;
+
+    const parameterId = body.readUInt8(offset);
+    const length = body.readUInt8(offset + 1);
+
+    offset += 2;
+
+    if (offset + length > body.length) break;
+
+    const value = body.subarray(offset, offset + length);
+    const name =
+      parameterNames[parameterId] ??
+      `Parameter0x${parameterId.toString(16).toUpperCase()}`;
+
+    if (length === 1) {
+      result[name] = value.readUInt8(0);
+    } else if (length === 2) {
+      result[name] = value.readUInt16BE(0);
+    } else if (length === 4) {
+      result[name] = value.readUInt32BE(0);
+    } else {
+      result[name] = value.toString('hex').toUpperCase();
+    }
+
+    offset += length;
+  }
+
+  return result;
+}
+
 export function buildOpenCommand(terminalId: string): Buffer {
   return Buffer.from(
     `7E03100009${terminalId.toUpperCase()}20460124060061646D696EEE7E`,

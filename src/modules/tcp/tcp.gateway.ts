@@ -9,9 +9,8 @@ import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../config/prisma/prisma.service';
 import {
-  buildEnableTrackingCommand,
-  buildForceGpsCommand,
   buildHHDResponse8001,
+  parseHHDParameterReport0313,
   parseHHDPacket,
   parseHHDPosition,
 } from './protocols/hhd-protocol';
@@ -89,116 +88,6 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
 
   onModuleDestroy(): void {
     this.server?.close();
-  }
-
-  sendEnableTrackingCommand(
-    terminalId: string,
-    options?: {
-      timeIntervalSeconds?: number;
-      heartbeatIntervalSeconds?: number;
-    },
-  ) {
-    const normalizedTerminalId = terminalId.toUpperCase();
-    const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
-
-    const timeIntervalSeconds = options?.timeIntervalSeconds ?? 30;
-    const heartbeatIntervalSeconds = options?.heartbeatIntervalSeconds ?? 60;
-
-    const command = buildEnableTrackingCommand(normalizedTerminalId, {
-      timeIntervalSeconds,
-      heartbeatIntervalSeconds,
-    });
-
-    if (device?.socket && !device.socket.destroyed) {
-      device.socket.write(command);
-
-      return {
-        terminalId: normalizedTerminalId,
-        action: 'ENABLE_TRACKING',
-        sent: true,
-        queued: false,
-        hexSent: command.toString('hex').toUpperCase(),
-        message: `Configuración de tracking enviada por TCP cada ${timeIntervalSeconds}s`,
-        timeIntervalSeconds,
-        heartbeatIntervalSeconds,
-      };
-    }
-
-    this.registry.queueCommand(normalizedTerminalId, command);
-
-    return {
-      terminalId: normalizedTerminalId,
-      action: 'ENABLE_TRACKING',
-      sent: false,
-      queued: true,
-      hexSent: command.toString('hex').toUpperCase(),
-      message:
-        'Configuración de tracking encolada hasta que el candado se conecte',
-      timeIntervalSeconds,
-      heartbeatIntervalSeconds,
-    };
-  }
-
-  sendForceGpsCommand(
-    terminalId: string,
-    options?: {
-      timeIntervalSeconds?: number;
-      heartbeatIntervalSeconds?: number;
-      positionAccuracyMeters?: number;
-      gnssPositionQuality?: number;
-      locationStatus?: number;
-    },
-  ) {
-    const normalizedTerminalId = terminalId.toUpperCase();
-    const device = this.registry.getDeviceByTerminalId(normalizedTerminalId);
-
-    const timeIntervalSeconds = options?.timeIntervalSeconds ?? 30;
-    const heartbeatIntervalSeconds = options?.heartbeatIntervalSeconds ?? 60;
-    const positionAccuracyMeters = options?.positionAccuracyMeters ?? 10;
-    const gnssPositionQuality = options?.gnssPositionQuality ?? 1;
-    const locationStatus = options?.locationStatus ?? 1;
-
-    const command = buildForceGpsCommand(normalizedTerminalId, {
-      timeIntervalSeconds,
-      heartbeatIntervalSeconds,
-      positionAccuracyMeters,
-      gnssPositionQuality,
-      locationStatus,
-    });
-
-    if (device?.socket && !device.socket.destroyed) {
-      device.socket.write(command);
-
-      return {
-        terminalId: normalizedTerminalId,
-        action: 'FORCE_GPS',
-        sent: true,
-        queued: false,
-        hexSent: command.toString('hex').toUpperCase(),
-        message: 'Comando GPS forzado enviado por TCP',
-        timeIntervalSeconds,
-        heartbeatIntervalSeconds,
-        positionAccuracyMeters,
-        gnssPositionQuality,
-        locationStatus,
-      };
-    }
-
-    this.registry.queueCommand(normalizedTerminalId, command);
-
-    return {
-      terminalId: normalizedTerminalId,
-      action: 'FORCE_GPS',
-      sent: false,
-      queued: true,
-      hexSent: command.toString('hex').toUpperCase(),
-      message: 'Comando GPS forzado encolado hasta que el candado se conecte',
-      timeIntervalSeconds,
-      heartbeatIntervalSeconds,
-      positionAccuracyMeters,
-      gnssPositionQuality,
-      locationStatus,
-    };
   }
 
   private async handleData(socket: net.Socket, buffer: Buffer): Promise<void> {
@@ -297,6 +186,20 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    if (parsed.msgId === 0x0313) {
+      const report = parseHHDParameterReport0313(parsed.body);
+
+      this.logger.log(
+        `Reporte parámetros 0313 terminal=${
+          parsed.terminalId
+        } data=${JSON.stringify(report)} bodyHEX=${parsed.body
+          .toString('hex')
+          .toUpperCase()}`,
+      );
+
+      await this.handleParameterReport(parsed.terminalId, report, hex);
+    }
+
     const response = buildHHDResponse8001(
       parsed.terminalId,
       parsed.serialNumber,
@@ -304,6 +207,56 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     );
 
     socket.write(response);
+  }
+
+  private async handleParameterReport(
+    terminalId: string,
+    report: Record<string, string | number>,
+    rawHex: string,
+  ): Promise<void> {
+    const metadata = {
+      source: 'TCP_HHD_PARAMETER_REPORT',
+      parameterReport: report,
+      parameterReportRawHex: rawHex,
+      parameterReportAt: new Date().toISOString(),
+      batteryVoltage: this.toNullableNumber(report.BatteryVoltage),
+      terminalAlarmBatteryLevel: this.toNullableNumber(
+        report.TerminalAlarmBatteryLevel,
+      ),
+      gpsLocationInfo:
+        typeof report.GPSlocationInfo === 'string'
+          ? report.GPSlocationInfo
+          : report.GPSlocationInfo !== undefined
+            ? String(report.GPSlocationInfo)
+            : null,
+      gnssPositionQuality: this.toNullableNumber(report.GNSSPositionQuality),
+      locationStatusCode: this.toNullableNumber(report.LocationStatus),
+      gpsPositionStatus: this.toNullableNumber(report.RealTimeLocStatus),
+      deviceStatus:
+        typeof report.DeviceStatus === 'string'
+          ? report.DeviceStatus
+          : report.DeviceStatus !== undefined
+            ? String(report.DeviceStatus)
+            : null,
+      positionAccuracy: this.toNullableNumber(report.PositionAccuracy),
+    } satisfies Prisma.InputJsonObject;
+
+    await this.prisma.device.updateMany({
+      where: {
+        OR: [
+          { deviceId: terminalId },
+          { imei: terminalId },
+          { serialNumber: terminalId },
+          { providerId: terminalId },
+        ],
+      },
+      data: {
+        onlineStatus: 'ONLINE',
+        lastConnectionAt: new Date(),
+        updatedAt: new Date(),
+        metadata,
+      },
+    });
   }
 
   private async handleGpsPosition(
@@ -530,6 +483,19 @@ export class TcpGateway implements OnModuleInit, OnModuleDestroy {
     });
 
     this.logger.warn(`Dispositivo marcado OFFLINE terminal=${terminalId}`);
+  }
+
+  private toNullableNumber(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === 'string' && value.trim() !== '') {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    return null;
   }
 
   private isValidCoordinate(latitude: number, longitude: number): boolean {
