@@ -41,7 +41,6 @@ let serverSerialNumber = 1;
 
 function getNextSerialNumber(): number {
   const current = serverSerialNumber;
-
   serverSerialNumber += 1;
 
   if (serverSerialNumber > 0xffff) {
@@ -157,6 +156,18 @@ function build0310Param(parameterIdHex: string, content: Buffer): Buffer {
     Buffer.from([content.length]),
     content,
   ]);
+}
+
+function build0310SingleStringParam(
+  terminalId: string,
+  parameterIdHex: string,
+  value: string,
+): Buffer {
+  const content = Buffer.from(value, 'ascii');
+  const params = [build0310Param(parameterIdHex, content)];
+  const body = Buffer.concat([Buffer.from([params.length]), ...params]);
+
+  return buildJT808Message(0x0310, terminalId, body);
 }
 
 function buildJT808Message(
@@ -318,15 +329,10 @@ function parseHhdAttributes(body: Buffer) {
 
     if (attributeId === 0x69 && value.length >= 2) {
       const raw = value.readUInt16BE(0);
-
-      // En el SDK este atributo aparece como BatteryVoltage.
-      // En varios equipos viene como centivoltios: 0192 = 402 = 4.02V.
       result.batteryVoltage = raw / 100;
     }
 
     if (attributeId === 0x6a && value.length >= 1) {
-      // En los paquetes reales este valor llega como 0x17/0x18.
-      // Lo dejamos como CSQ, porque coincide con rango de señal GSM.
       result.csq = value.readUInt8(0);
     }
 
@@ -341,7 +347,6 @@ function parseHhdAttributes(body: Buffer) {
       result.batteryLevel = normalizeBatteryPercent(raw);
     }
 
-    // Atributo 0x64 suele venir asociado a WiFi MAC en el SDK.
     if (attributeId === 0x64 && value.length > 0) {
       result.hasWifi = true;
     }
@@ -543,8 +548,6 @@ export function buildForceGpsCommand(
   const heartbeatIntervalSeconds = options?.heartbeatIntervalSeconds ?? 60;
   const positionAccuracyMeters = options?.positionAccuracyMeters ?? 10;
 
-  // Valores experimentales basados en el SDK:
-  // 2C = GNSSPositionQuality, 18 = LocationStatus, 17 = PositionAccuracy.
   const gnssPositionQuality = options?.gnssPositionQuality ?? 1;
   const locationStatus = options?.locationStatus ?? 1;
 
@@ -562,16 +565,7 @@ export function buildForceGpsCommand(
 }
 
 export function buildReadGpsStatusCommand(terminalId: string): Buffer {
-  const parameterIds = [
-    '94', // BatteryVoltage
-    '97', // GPSlocationInfo
-    '2C', // GNSSPositionQuality
-    '18', // LocationStatus
-    '17', // PositionAccuracy
-    '71', // RealTimeLocStatus
-    '96', // DeviceStatus
-    '8B', // TerminalAlarmBatteryLevel
-  ];
+  const parameterIds = ['94', '97', '2C', '18', '17', '71', '96', '8B'];
 
   const body = Buffer.concat([
     Buffer.from([0x00, parameterIds.length]),
@@ -650,4 +644,37 @@ export function buildCloseCommand(terminalId: string): Buffer {
     `7E03100009${terminalId.toUpperCase()}20460124060061646D696EEF7E`,
     'hex',
   );
+}
+
+export function buildSetPasswordCommand(
+  terminalId: string,
+  password: string,
+): Buffer {
+  return build0310SingleStringParam(terminalId, '5B', password);
+}
+
+export function buildSetIcCardPasswordCommand(
+  terminalId: string,
+  password: string,
+): Buffer {
+  return build0310SingleStringParam(terminalId, '12', password);
+}
+
+export function buildAutoBindCardModeCommand(
+  terminalId: string,
+  seconds: number,
+): Buffer {
+  const safeSeconds = Math.max(1, Math.min(seconds, 3600));
+
+  const params = [build0310Param('2A', intTo4Bytes(safeSeconds))];
+  const body = Buffer.concat([Buffer.from([params.length]), ...params]);
+
+  return buildJT808Message(0x0310, terminalId, body);
+}
+
+export function buildClearIcCardsCommand(terminalId: string): Buffer {
+  const params = [build0310Param('23', intTo1Byte(1))];
+  const body = Buffer.concat([Buffer.from([params.length]), ...params]);
+
+  return buildJT808Message(0x0310, terminalId, body);
 }
